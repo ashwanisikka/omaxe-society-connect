@@ -1,10 +1,9 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { initializeApp } from 'firebase/app';
+import { initializeApp, getApps, getApp } from 'firebase/app';
 import App from './App.tsx';
 import './index.css';
 
-// Firebase configuration using your project credentials
 const firebaseConfig = {
   projectId: "omaxe-heights-portal",
   appId: "1:398226441084:web:9c11756e4f220d8d275af9",
@@ -14,10 +13,9 @@ const firebaseConfig = {
   messagingSenderId: "398226441084"
 };
 
-// Initialize Firebase for the entire browser application
-initializeApp(firebaseConfig);
+// If Firebase is already initialized somewhere else, use that; otherwise, initialize it.
+const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 
-// Mount the React Application layout to the HTML root entry point
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <App />
