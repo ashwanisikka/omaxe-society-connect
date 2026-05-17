@@ -2,6 +2,7 @@ import React from 'react';
 import { useAuth } from 'hooks/useAuth'; 
 import { biometricService } from 'services/biometricService';
 import { getAuth } from 'firebase/auth';
+import { getApp } from 'firebase/app';
 import { Button } from './components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from './components/ui/card';
 import { Input } from './components/ui/input';
@@ -16,7 +17,8 @@ function AppContent() {
   const [forcedDashboardBypass, setForcedDashboardBypass] = React.useState(false);
   const [isDeviceVerified, setIsDeviceVerified] = React.useState(false);
 
-  const auth = getAuth();
+  // Initialize Auth safely by pulling the active running app instance instance
+  const auth = getAuth(getApp());
 
   // --- 1. AUTOMATIC BIOMETRIC PASSKEY CHECK FOR RETURNING USERS ---
   React.useEffect(() => {
