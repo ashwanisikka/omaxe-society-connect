@@ -1,0 +1,79 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+    function isSignedIn() { return request.auth != null; }
+    function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
+    
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    // Role checks
+    function isEmailAdmin() {
+      return isSignedIn() && (request.auth.token.email.lower() == 'ashwani.sikka@gmail.com');
+    }
+
+    function isAdmin() { 
+      return isEmailAdmin() || (isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', 'user') == 'admin');
+    }
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // User profiles
+    match /users/{userId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isOwner(userId);
+      allow update: if isEmailAdmin() || 
+                    (isOwner(userId) && 
+                     request.resource.data.get('role', 'user') == resource.data.get('role', 'user') &&
+                     request.resource.data.get('isBlocked', false) == resource.data.get('isBlocked', false));
+      allow delete: if isEmailAdmin() && userId != request.auth.uid; // Prevent self-deletion via rules but allow master admin to delete others
+    }
+
+    // Posts
+    match /posts/{postId} {
+      function isValidPost(data) {
+        return data.authorId is string &&
+               data.authorName is string &&
+               data.title is string && data.title.size() <= 200 &&
+               data.content is string && data.content.size() <= 10000 &&
+               (data.get('imageUrls', []) is list) &&
+               data.category in ['household', 'advertisement', 'general', 'lost-found', 'business', 'professionals', 'vendors', 'emergency'] &&
+               data.status in ['pending', 'approved', 'rejected'] &&
+               data.createdAt is timestamp;
+      }
+
+      allow get: if isSignedIn() && (resource.data.status == 'approved' || isAdmin() || isOwner(resource.data.authorId));
+      allow list: if isSignedIn() && (resource.data.status == 'approved' || isEmailAdmin() || resource.data.authorId == request.auth.uid);
+      
+      allow create: if isSignedIn() && 
+                    request.resource.data.authorId == request.auth.uid &&
+                    (request.resource.data.status == 'pending' || isAdmin()) &&
+                    isValidPost(request.resource.data);
+      allow update: if isEmailAdmin() || isAdmin() || (isSignedIn() && isOwner(resource.data.authorId));
+      allow delete: if isEmailAdmin() || isAdmin() || (isSignedIn() && isOwner(resource.data.authorId));
+
+      // Comments subcollection
+      match /comments/{commentId} {
+        function isValidComment(data) {
+          return data.authorId is string &&
+                 data.authorName is string &&
+                 data.content is string && data.content.size() <= 1000 &&
+                 data.postId == postId &&
+                 data.createdAt is timestamp;
+        }
+
+        allow read: if isSignedIn();
+        allow create: if isSignedIn() && 
+                      request.resource.data.authorId == request.auth.uid &&
+                      isValidComment(request.resource.data);
+        allow delete: if isAdmin() || (isSignedIn() && isOwner(resource.data.authorId));
+      }
+    }
+  }
+}

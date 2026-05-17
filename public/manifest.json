@@ -1,0 +1,17 @@
+{
+  "name": "Omaxe Heights",
+  "short_name": "OmaxeH",
+  "description": "Digital Residential Portal for Omaxe Heights residents.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#111827",
+  "theme_color": "#4f46e5",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/1239/1239525.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

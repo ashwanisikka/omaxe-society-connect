@@ -1,0 +1,6 @@
+{
+  "name": "Omaxe Heights Portal",
+  "description": "Society's Local Directory and Ad portal for residents of Omaxe Heights, providing a secure platform for community interaction and announcements. Sonipat, Haryana.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
