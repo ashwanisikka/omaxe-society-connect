@@ -1,6 +1,7 @@
 import React from 'react';
-import { useAuth } from './hooks/useAuth'; 
-import { biometricService } from './services/biometricService';
+import { useAuth } from 'hooks/useAuth'; 
+import { biometricService } from 'services/biometricService';
+import { getAuth } from 'firebase/auth';
 import { Button } from './components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from './components/ui/card';
 import { Input } from './components/ui/input';
