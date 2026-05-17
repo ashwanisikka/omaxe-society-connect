@@ -1,116 +1,69 @@
 import { 
+  getFirestore, 
   collection, 
   addDoc, 
-  updateDoc, 
-  deleteDoc, 
-  doc, 
+  getDocs, 
   query, 
-  where, 
   orderBy, 
-  onSnapshot, 
-  serverTimestamp,
-  getDocs
+  doc, 
+  updateDoc, 
+  arrayUnion 
 } from 'firebase/firestore';
-import { db, auth, handleFirestoreError, OperationType } from '../lib/firebase';
-import { Post, PostCategory, PostStatus } from '../types';
+import { getAuth } from 'firebase/auth';
+
+const db = getFirestore();
+const auth = getAuth();
 
 export const postService = {
-  async createPost(title: string, content: string, category: PostCategory, authorName: string, imageUrls?: string[]) {
-    const path = 'posts';
-    try {
-      if (!auth.currentUser) throw new Error("Not authenticated");
-      const postData = {
-        authorId: auth.currentUser.uid,
-        authorName,
-        title,
-        content,
-        imageUrls: imageUrls || [],
-        category,
-        status: 'pending',
-        createdAt: serverTimestamp(),
-      };
-      return await addDoc(collection(db, path), postData);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, path);
-    }
-  },
-
-  async updatePostStatus(postId: string, status: PostStatus) {
-    const path = `posts/${postId}`;
-    try {
-      const postRef = doc(db, 'posts', postId);
-      await updateDoc(postRef, { 
-        status, 
-        updatedAt: serverTimestamp() 
-      });
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, path);
-    }
-  },
-
-  async deletePost(postId: string) {
-    const path = `posts/${postId}`;
-    try {
-      await deleteDoc(doc(db, 'posts', postId));
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, path);
-    }
-  },
-
-  subscribeToPosts(callback: (posts: Post[]) => void, filters?: { category?: PostCategory, status?: PostStatus }) {
-    const path = 'posts';
-    let q = query(collection(db, path), orderBy('createdAt', 'desc'));
-
-    if (filters?.status) {
-      q = query(q, where('status', '==', filters.status));
-    }
-    if (filters?.category) {
-      q = query(q, where('category', '==', filters.category));
-    }
-
-    return onSnapshot(q, (snapshot) => {
-      const posts = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Post));
-      callback(posts);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, path);
+  // 1. Fetches all society noticeboard posts ordered by newest first
+  async getAllPosts() {
+    const postsRef = collection(db, 'posts');
+    const q = query(postsRef, orderBy('createdAt', 'desc'));
+    const querySnapshot = await getDocs(q);
+    
+    const posts: any[] = [];
+    querySnapshot.forEach((doc) => {
+      posts.push({ id: doc.id, ...doc.data() });
     });
+    return posts;
   },
 
-  async addComment(postId: string, content: string, authorName: string) {
-    const path = `posts/${postId}/comments`;
-    try {
-      if (!auth.currentUser) throw new Error("Not authenticated");
-      const commentData = {
-        postId,
-        authorId: auth.currentUser.uid,
-        authorName,
-        content,
-        createdAt: serverTimestamp(),
-      };
-      return await addDoc(collection(db, path), commentData);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, path);
-    }
+  // 2. Creates a brand new post directly in the Firestore database
+  async createPost(postData: { title: string; content: string; imageUrl?: string }) {
+    const currentUser = auth.currentUser;
+    if (!currentUser) throw new Error("You must be logged in to create a post.");
+
+    const newPost = {
+      title: postData.title,
+      content: postData.content,
+      imageUrl: postData.imageUrl || null,
+      authorId: currentUser.uid,
+      authorName: currentUser.displayName || "Resident",
+      comments: [],
+      createdAt: new Date().toISOString()
+    };
+
+    const docRef = await addDoc(collection(db, 'posts'), newPost);
+    return { id: docRef.id, ...newPost };
   },
 
-  subscribeToComments(postId: string, callback: (comments: any[]) => void) {
-    const path = `posts/${postId}/comments`;
-    const q = query(collection(db, path), orderBy('createdAt', 'asc'));
+  // 3. Appends a new comment inside a post document array
+  async addComment(postId: string, commentText: string) {
+    const currentUser = auth.currentUser;
+    if (!currentUser) throw new Error("You must be logged in to comment.");
 
-    return onSnapshot(q, (snapshot) => {
-      const comments = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      callback(comments);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, path);
+    const newComment = {
+      text: commentText,
+      authorId: currentUser.uid,
+      authorName: currentUser.displayName || "Resident",
+      createdAt: new Date().toISOString()
+    };
+
+    const postRef = doc(db, 'posts', postId);
+    await updateDoc(postRef, {
+      comments: arrayUnion(newComment)
     });
-  },
 
-  async deleteComment(postId: string, commentId: string) {
-    const path = `posts/${postId}/comments/${commentId}`;
-    try {
-      await deleteDoc(doc(db, 'posts', postId, 'comments', commentId));
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, path);
-    }
+    return newComment;
   }
 };
