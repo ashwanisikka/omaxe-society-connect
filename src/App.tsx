@@ -1,6 +1,6 @@
 import React from 'react';
-import { useAuth } from 'hooks/useAuth'; 
-import { biometricService } from 'services/biometricService';
+import { useAuth } from './hooks/useAuth'; 
+import { biometricService } from './services/biometricService';
 import { getAuth } from 'firebase/auth';
 import { getApp } from 'firebase/app';
 import { Button } from './components/ui/button';
@@ -17,7 +17,7 @@ function AppContent() {
   const [forcedDashboardBypass, setForcedDashboardBypass] = React.useState(false);
   const [isDeviceVerified, setIsDeviceVerified] = React.useState(false);
 
-  // Initialize Auth safely by pulling the active running app instance instance
+  // Initialize Auth safely by pulling the active running app instance
   const auth = getAuth(getApp());
 
   // --- 1. AUTOMATIC BIOMETRIC PASSKEY CHECK FOR RETURNING USERS ---
@@ -228,7 +228,7 @@ function AppContent() {
     );
   }
 
-  // Route B: Google Identity Phone Verification Gate (Fires if user is authenticated via OAuth but missing hardware bind verification)
+  // Route B: Google Identity Phone Verification Gate
   if (user) {
     return (
       <div className="min-h-screen relative flex items-center justify-center p-4 overflow-hidden bg-slate-950">
