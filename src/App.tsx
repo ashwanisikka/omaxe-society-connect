@@ -1,5 +1,5 @@
 import React from 'react';
-import { useAuth } from './hooks/useAuth'; 
+import { useAuth } from './contexts/useAuth'; 
 import { biometricService } from './services/biometricService';
 import { getAuth } from 'firebase/auth';
 import { getApp } from 'firebase/app';
