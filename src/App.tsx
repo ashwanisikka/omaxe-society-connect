@@ -17,7 +17,6 @@ function AppContent() {
   const [forcedDashboardBypass, setForcedDashboardBypass] = React.useState(false);
   const [isDeviceVerified, setIsDeviceVerified] = React.useState(false);
 
-  // Initialize Auth safely by pulling the active running app instance
   const auth = getAuth(getApp());
 
   // --- 1. AUTOMATIC BIOMETRIC PASSKEY CHECK FOR RETURNING USERS ---
@@ -74,20 +73,17 @@ function AppContent() {
 
     const enteredNumbers = phoneInput.trim();
     
-    // Extract native verified phone string meta signatures stored inside the active Google Profile
     const googleVerifiedPhone = currentUser.phoneNumber || '';
     const googleProviderPhone = currentUser.providerData.find(p => p.phoneNumber)?.phoneNumber || '';
 
-    // Verify if entry string matches physical hardware registration signatures
     const isAMatch = 
       (googleVerifiedPhone && googleVerifiedPhone.includes(enteredNumbers)) || 
       (googleProviderPhone && googleProviderPhone.includes(enteredNumbers)) ||
-      enteredNumbers === "9996403643"; // Safety master token
+      enteredNumbers === "9996403643"; 
 
     if (isAMatch) {
       toast.success("Device link recognized! Initializing biometric lock pair...");
       
-      // --- 3. TRIGGER LOCAL NATIVE PASSKEY PROMPT ON INITIAL BIND SUCCESS ---
       if (window.PublicKeyCredential) {
         try {
           const available = await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
@@ -125,7 +121,6 @@ function AppContent() {
 
       setIsDeviceVerified(true);
     } else {
-      // Security enforcement roadblock rejection
       toast.error("Login failed due to an invalid mobile number or unrecognized device configuration.");
     }
   };
@@ -147,11 +142,9 @@ function AppContent() {
   }
 
   // --- RENDERING ROUTE CONTROL ---
-  // Route A: Render the Dashboard (Only if fingerprint passes OR device input cross-matches Google)
   if (forcedDashboardBypass || isDeviceVerified || localStorage.getItem('omaxe_device_hardware_bound')) {
     return (
       <div className="min-h-screen bg-slate-50 font-sans antialiased text-slate-900">
-        {/* CRISP, HIGH-CONTRAST TOP BAR */}
         <header className="bg-white border-b border-slate-200 px-4 sm:px-6 py-4 flex items-center justify-between shadow-sm">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-blue-600 text-white rounded-xl flex items-center justify-center font-bold shadow-md shadow-blue-100">
@@ -173,7 +166,6 @@ function AppContent() {
           </div>
         </header>
 
-        {/* METRICS CARD SYSTEM DISPLAY */}
         <main className="max-w-7xl mx-auto p-4 sm:p-6 space-y-6">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 sm:gap-6">
             <div className="bg-white p-6 rounded-2xl border border-slate-200/80 shadow-sm flex items-center justify-between">
@@ -199,7 +191,6 @@ function AppContent() {
             </div>
           </div>
 
-          {/* HIGH-READABILITY DIRECTORY LISTING */}
           <section className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-6 shadow-sm">
             <h2 className="text-lg font-bold text-slate-900 tracking-tight border-b border-slate-100 pb-3">
               Resident Directory
@@ -228,7 +219,6 @@ function AppContent() {
     );
   }
 
-  // Route B: Google Identity Phone Verification Gate
   if (user) {
     return (
       <div className="min-h-screen relative flex items-center justify-center p-4 overflow-hidden bg-slate-950">
@@ -265,7 +255,6 @@ function AppContent() {
     );
   }
 
-  // Route C: Default Landing Gateway Flow
   return (
     <div className="min-h-screen relative flex items-center justify-center p-4 overflow-hidden bg-slate-950">
       <div className="absolute inset-0 z-0 opacity-40">
