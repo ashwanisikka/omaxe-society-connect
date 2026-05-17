@@ -4,7 +4,7 @@ class GeminiService {
   private ai: GoogleGenAI;
 
   constructor() {
-    this.ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    this.ai = new GoogleGenAI({ apiKey: "AIzaSyAwlBYdld8FlgrAi8OtOrFJaWKK0jV0f2w" });
   }
 
   async moderateImage(base64Image: string, mimeType: string): Promise<{ safe: boolean; reason?: string }> {
