@@ -1,26 +1,23 @@
 {
-  "name": "react-example",
+  "name": "omaxe-society-connect",
   "private": true,
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx server.ts",
-    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
-    "start": "node dist/server.cjs",
-    "clean": "rm -rf dist",
-    "lint": "tsc --noEmit"
+    "dev": "vite",
+    "build": "vite build",
+    "lint": "tsc --noEmit",
+    "preview": "vite preview"
   },
   "dependencies": {
     "@base-ui/react": "^1.4.1",
     "@fontsource-variable/geist": "^5.2.8",
-    "@google/genai": "^1.52.0",
+    "@google/genai": "^1.5.2",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
-    "dotenv": "^17.2.3",
-    "express": "^5.2.1",
     "firebase": "^12.13.0",
     "lucide-react": "^1.16.0",
     "motion": "^12.23.24",
@@ -35,13 +32,12 @@
     "vite": "^6.2.3"
   },
   "devDependencies": {
-    "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
+    "@types/react": "^19.0.1",
+    "@types/react-dom": "^19.0.1",
     "autoprefixer": "^10.4.21",
-    "esbuild": "^0.25.12",
+    "postcss": "^8.4.38",
     "tailwindcss": "^4.1.14",
-    "tsx": "^4.22.1",
-    "typescript": "~5.8.2",
-    "vite": "^6.2.3"
+    "typescript": "~5.8.2"
   }
 }
