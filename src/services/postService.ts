@@ -7,7 +7,8 @@ import {
   orderBy, 
   doc, 
   updateDoc, 
-  arrayUnion 
+  arrayUnion,
+  onSnapshot
 } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
 
@@ -28,7 +29,24 @@ export const postService = {
     return posts;
   },
 
-  // 2. Creates a brand new post directly in the Firestore database
+  // 2. Missing function causing the dashboard crash: Live stream listener
+  subscribeToPosts(callback: (posts: any[]) => void) {
+    const postsRef = collection(db, 'posts');
+    const q = query(postsRef, orderBy('createdAt', 'desc'));
+    
+    // Automatically pushes updates to your dashboard whenever a new post is added
+    return onSnapshot(q, (snapshot) => {
+      const posts: any[] = [];
+      snapshot.forEach((doc) => {
+        posts.push({ id: doc.id, ...doc.data() });
+      });
+      callback(posts);
+    }, (error) => {
+      console.error("Firebase subscription error:", error);
+    });
+  },
+
+  // 3. Creates a brand new post directly in the Firestore database
   async createPost(postData: { title: string; content: string; imageUrl?: string }) {
     const currentUser = auth.currentUser;
     if (!currentUser) throw new Error("You must be logged in to create a post.");
@@ -47,7 +65,7 @@ export const postService = {
     return { id: docRef.id, ...newPost };
   },
 
-  // 3. Appends a new comment inside a post document array
+  // 4. Appends a new comment inside a post document array
   async addComment(postId: string, commentText: string) {
     const currentUser = auth.currentUser;
     if (!currentUser) throw new Error("You must be logged in to comment.");
