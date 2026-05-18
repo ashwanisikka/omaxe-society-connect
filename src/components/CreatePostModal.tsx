@@ -1,9 +1,7 @@
 import React, { useState } from 'react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription, DialogFooter, DialogClose } from './ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription, DialogClose } from './ui/dialog';
 import { Button } from './ui/button';
-import { Input } from './ui/input';
 import { Textarea } from './ui/textarea';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Label } from './ui/label';
 import { PostCategory } from '../types';
 import { postService } from '../services/postService';
@@ -44,7 +42,7 @@ export function CreatePostModal({ isOpen: propOpen, onOpenChange: propOnOpenChan
         img.src = event.target?.result as string;
         img.onload = () => {
           const canvas = document.createElement('canvas');
-          const MAX_WIDTH = 800; // Limit size to ensure it fits in 1MB document
+          const MAX_WIDTH = 800;
           const MAX_HEIGHT = 800;
           let width = img.width;
           let height = img.height;
@@ -66,7 +64,6 @@ export function CreatePostModal({ isOpen: propOpen, onOpenChange: propOnOpenChan
           const ctx = canvas.getContext('2d');
           ctx?.drawImage(img, 0, 0, width, height);
           
-          // Using 0.5 quality to keep each image ~50-100KB
           const compressed = canvas.toDataURL('image/jpeg', 0.5);
           resolve(compressed);
         };
@@ -112,7 +109,6 @@ export function CreatePostModal({ isOpen: propOpen, onOpenChange: propOnOpenChan
 
       if (images.length > 0) {
         setModerating(true);
-        // Moderate each image
         for (const img of images) {
           const moderation = await geminiService.moderateImage(img.preview, img.file?.type || 'image/jpeg');
           if (!moderation.safe) {
@@ -136,12 +132,14 @@ export function CreatePostModal({ isOpen: propOpen, onOpenChange: propOnOpenChan
         profile?.displayName || 'Anonymous',
         finalImageUrls
       );
+      
       toast.success('Post submitted for approval!');
       setFormData({ title: '', content: '', category: 'general' });
       setImages([]);
       setOpen(false);
-    } catch (error) {
-      toast.error('Failed to create post');
+    } catch (error: any) {
+      console.error("Database Save Error Details:", error);
+      toast.error(error?.message || 'Failed to create post. Please check database permissions.');
     } finally {
       setLoading(false);
       setModerating(false);
@@ -173,7 +171,7 @@ export function CreatePostModal({ isOpen: propOpen, onOpenChange: propOnOpenChan
       )}
       <DialogContent className="sm:max-w-[550px] p-0 overflow-hidden border-none shadow-[0_40px_100px_-15px_rgba(0,0,0,0.5)] rounded-[2rem] bg-white">
         <form onSubmit={handleSubmit} className="flex flex-col max-h-[85vh]">
-            <div className="bg-slate-900 pt-10 pb-6 px-8 text-white relative overflow-hidden shrink-0">
+          <div className="bg-slate-900 pt-10 pb-6 px-8 text-white relative overflow-hidden shrink-0">
             <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-600/20 rounded-full -translate-y-16 translate-x-16" />
             
             <DialogClose
