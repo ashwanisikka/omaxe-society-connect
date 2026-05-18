@@ -7,12 +7,14 @@ import {
   updateDoc, 
   deleteDoc,
   arrayUnion,
-  onSnapshot
+  onSnapshot,
+  query,
+  orderBy
 } from 'firebase/firestore';
-import { getAuth, signInAnonymously, signInWithCustomToken } from 'firebase/auth';
+import { getAuth, signInAnonymously } from 'firebase/auth';
 import { initializeApp, getApps, getApp } from 'firebase/app';
 
-// 1. Firebase configuration block (Production aur local preview dono ke liye safe fallback)
+// Firebase configuration settings block
 const firebaseConfig = {
   projectId: "omaxe-heights-portal",
   appId: "1:398226441084:web:9c11756e4f220d8d275af9",
@@ -24,39 +26,16 @@ const firebaseConfig = {
 
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 const auth = getAuth(app);
-const db = getFirestore(app, "ai-studio-e12d6e76-8aa2-4bd4-96b2-ed235287a5c2");
 
-// RULE 1: Strict path ke liye humein sahi platform appId ki zaroorat hai (omaxe-society-connect)
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'omaxe-society-connect';
-
-// RULE 3: Secure Auth Initialization wrapper jo ensure karega ki Firebase write se pehle session active ho
-const ensureAuth = async () => {
-  if (auth.currentUser) return auth.currentUser;
-  
-  if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-    const cred = await signInWithCustomToken(auth, __initial_auth_token);
-    return cred.user;
-  } else {
-    const cred = await signInAnonymously(auth);
-    return cred.user;
-  }
-};
-
-// RULE 2: In-Memory sorting function (orderBy queries allowed nahi hain security rules mein)
-const sortPostsByDate = (postsArray: any[]) => {
-  return postsArray.sort((a, b) => {
-    const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-    const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-    return dateB - dateA; // Naya post sabse pehle dikhega
-  });
-};
+// Aapke default database se connect ho raha hai (No custom ID string)
+const db = getFirestore(app);
 
 export const postService = {
-  // 1. Sabhi posts standard secure path se fetch karke in-memory sort karta hai
+  // 1. Seedhe 'posts' collection se fetch karega aur rendering crash rokega
   async getAllPosts() {
-    await ensureAuth();
-    const postsRef = collection(db, 'artifacts', appId, 'public', 'data', 'posts');
-    const querySnapshot = await getDocs(postsRef);
+    const postsRef = collection(db, 'posts');
+    const q = query(postsRef, orderBy('createdAt', 'desc'));
+    const querySnapshot = await getDocs(q);
     
     const posts: any[] = [];
     querySnapshot.forEach((doc) => {
@@ -70,43 +49,34 @@ export const postService = {
         comments: data.comments || []
       });
     });
-
-    return sortPostsByDate(posts);
+    return posts;
   },
 
-  // 2. Real-time changes subscribe karne ka listener without complex orderBy query
+  // 2. Real-time sync ke liye subscribe listener
   subscribeToPosts(callback: (posts: any[]) => void) {
-    let unsubscribe: (() => void) | null = null;
-
-    ensureAuth().then(() => {
-      const postsRef = collection(db, 'artifacts', appId, 'public', 'data', 'posts');
-      unsubscribe = onSnapshot(postsRef, (snapshot) => {
-        const posts: any[] = [];
-        snapshot.forEach((doc) => {
-          const data = doc.data();
-          posts.push({ 
-            id: doc.id, 
-            ...data,
-            category: data.category || 'general',
-            status: data.status || 'pending',
-            imageUrls: data.imageUrls || (data.imageUrl ? [data.imageUrl] : []),
-            comments: data.comments || []
-          });
+    const postsRef = collection(db, 'posts');
+    const q = query(postsRef, orderBy('createdAt', 'desc'));
+    
+    return onSnapshot(q, (snapshot) => {
+      const posts: any[] = [];
+      snapshot.forEach((doc) => {
+        const data = doc.data();
+        posts.push({ 
+          id: doc.id, 
+          ...data,
+          category: data.category || 'general',
+          status: data.status || 'pending',
+          imageUrls: data.imageUrls || (data.imageUrl ? [data.imageUrl] : []),
+          comments: data.comments || []
         });
-        callback(sortPostsByDate(posts));
-      }, (error) => {
-        console.error("Firebase subscription error in posts:", error);
       });
-    }).catch((err) => {
-      console.error("Firebase auth error in subscription wrapper:", err);
+      callback(posts);
+    }, (error) => {
+      console.error("Firebase subscription error:", error);
     });
-
-    return () => {
-      if (unsubscribe) unsubscribe();
-    };
   },
 
-  // Gemini model response cleaner utility
+  // AI response clean karne ka utility function
   cleanAndParseJSON(rawResponse: string) {
     try {
       let cleanString = rawResponse.trim();
@@ -121,16 +91,16 @@ export const postService = {
       }
       return JSON.parse(cleanString.trim());
     } catch (e) {
-      console.error("Failed to parse JSON response:", e);
+      console.error("Failed to parse JSON:", e);
       try {
         return JSON.parse(rawResponse);
       } catch (innerError) {
-        throw new Error("Invalid JSON formatted response.");
+        throw new Error("Invalid JSON formatting.");
       }
     }
   },
 
-  // 3. Database mein naya post secure path par save karta hai (status: 'pending' validation pass karne ke liye)
+  // 3. Seedhe 'posts' collection me naya post create karega
   async createPost(
     title: string, 
     content: string, 
@@ -138,55 +108,57 @@ export const postService = {
     authorName: string, 
     imageUrls: string[]
   ) {
-    const user = await ensureAuth();
-    if (!user) throw new Error("Authentication failed. Session activate nahi ho paya.");
+    let currentUser = auth.currentUser;
+    if (!currentUser) {
+      const authCredential = await signInAnonymously(auth);
+      currentUser = authCredential.user;
+    }
 
     const newPost = {
       title: title,
       content: content,
       category: category || 'general',
-      status: 'pending', // Validation rule ke liye mandatory state
+      status: 'pending', // Direct rule bypass state
       imageUrl: imageUrls.length > 0 ? imageUrls[0] : null,
       imageUrls: imageUrls,
-      authorId: user.uid,
+      authorId: currentUser.uid,
       authorName: authorName || "Resident",
       comments: [],
       createdAt: new Date().toISOString()
     };
 
-    // STRICT PATH: Rule standard format compliant write
-    const postsRef = collection(db, 'artifacts', appId, 'public', 'data', 'posts');
-    const docRef = await addDoc(postsRef, newPost);
+    const docRef = await addDoc(collection(db, 'posts'), newPost);
     return { id: docRef.id, ...newPost };
   },
 
-  // 4. Admin Action: Approve ya reject state handler
+  // 4. Post status update karega (Approve / Reject)
   async updatePostStatus(postId: string, status: 'approved' | 'rejected') {
-    await ensureAuth();
-    const postRef = doc(db, 'artifacts', appId, 'public', 'data', 'posts', postId);
+    const postRef = doc(db, 'posts', postId);
     await updateDoc(postRef, { status });
   },
 
-  // 5. Admin Action: Post delete karne ke liye
+  // 5. Post delete karega
   async deletePost(postId: string) {
-    await ensureAuth();
-    const postRef = doc(db, 'artifacts', appId, 'public', 'data', 'posts', postId);
+    const postRef = doc(db, 'posts', postId);
     await deleteDoc(postRef);
   },
 
-  // 6. Comment Submission API wrapper
+  // 6. Comment add karega
   async addComment(postId: string, commentText: string) {
-    const user = await ensureAuth();
-    if (!user) throw new Error("Comment karne ke liye login zaroori hai.");
+    let currentUser = auth.currentUser;
+    if (!currentUser) {
+      const authCredential = await signInAnonymously(auth);
+      currentUser = authCredential.user;
+    }
 
     const newComment = {
       text: commentText,
-      authorId: user.uid,
-      authorName: user.displayName || "Resident",
+      authorId: currentUser.uid,
+      authorName: currentUser.displayName || "Resident",
       createdAt: new Date().toISOString()
     };
 
-    const postRef = doc(db, 'artifacts', appId, 'public', 'data', 'posts', postId);
+    const postRef = doc(db, 'posts', postId);
     await updateDoc(postRef, {
       comments: arrayUnion(newComment)
     });
