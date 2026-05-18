@@ -2,16 +2,22 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { 
   onAuthStateChanged, 
   signInWithPopup, 
+  signInWithRedirect,
+  getRedirectResult,
   GoogleAuthProvider, 
   signOut,
   setPersistence,
   browserLocalPersistence,
   User
 } from 'firebase/auth';
-import { doc, getDoc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
-import { auth, db } from '../lib/firebase';
+import { doc, getDoc, setDoc, updateDoc, serverTimestamp, getFirestore } from 'firebase/firestore';
+import { auth, db, app } from '../lib/firebase';
 import { UserProfile, UserRole } from '../types';
 import { toast } from 'sonner';
+
+// Custom database index loading checks to prevent cross-origin instance storage blocks
+const customDbId = "ai-studio-e12d6e76-8aa2-4bd4-96b2-ed235287a5c2";
+const safeDb = db ? db : getFirestore(app, customDbId);
 
 interface AuthContextType {
   user: User | null;
@@ -58,7 +64,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const handleUserLogin = async (currentUser: User) => {
     try {
       console.log("[AuthContext] Reading profile database for:", currentUser.uid);
-      const userDocRef = doc(db, 'users', currentUser.uid);
+      const userDocRef = doc(safeDb, 'users', currentUser.uid);
       const userDoc = await getDoc(userDocRef);
       const deviceSig = getDeviceSignature();
 
@@ -103,10 +109,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   useEffect(() => {
-    // 1. Establish persistent local state on startup
+    // 1. Establish persistent local storage persistence config on startup
     setPersistence(auth, browserLocalPersistence)
       .then(() => {
-        console.log("[AuthContext] Session persistence initialized successfully to local storage.");
+        console.log("[AuthContext] Session persistence initialized successfully.");
       })
       .catch((err) => {
         console.error("[AuthContext] Failed to set session persistence:", err);
@@ -118,7 +124,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setLoading(false);
     }, 1500);
 
-    // 3. Watch persistent auth status on boot up
+    // 3. Handle Redirect callbacks automatically when return from Google pages
+    getRedirectResult(auth)
+      .then(async (result) => {
+        if (result && result.user) {
+          console.log("[AuthContext] Redirect login verification successful!");
+          setUser(result.user);
+          await handleUserLogin(result.user);
+        }
+      })
+      .catch((err: any) => {
+        console.warn("[AuthContext] Redirect callback bypassed:", err.message);
+        if (err.code === 'auth/unauthorized-domain') {
+          toast.error("Vercel domain is unauthorized in Firebase Console Settings!");
+        }
+      });
+
+    // 4. Watch persistent auth status on boot up
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       try {
         if (currentUser) {
@@ -146,7 +168,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, []);
 
-  // Central Google Sign-in trigger with ZERO async delay to prevent popup blocking!
+  // Central Google Sign-in trigger with ZERO delay & automatic fallback logic!
   const executeGoogleAuth = (e?: any) => {
     // Immediate browser default prevent to stop page reloads during click events
     if (e) {
@@ -160,7 +182,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: 'select_account' }); // Enforce manual chooser screen
     
-    // Direct synchronous call ensures the popup blocker is completely bypassed!
+    // Direct synchronous call ensures the popup blocker is completely bypassed on Desktop!
     console.log("[AuthContext] Launching direct Google Popup...");
     signInWithPopup(auth, provider)
       .then(async (result) => {
@@ -169,14 +191,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await handleUserLogin(result.user);
       })
       .catch((popupErr: any) => {
-        console.error("[AuthContext] Direct popup login crashed:", popupErr);
-        setLoading(false);
+        console.error("[AuthContext] Popup sign-in error details:", popupErr);
+        
+        // AUTOMATIC FAILOVER REDIRECT: If popup is blocked, seamlessly trigger redirect fallback!
         if (popupErr.code === 'auth/popup-blocked') {
-          toast.error("Popup window blocked! Kripya settings mein popups allow karke click kijiye.");
+          console.log("[AuthContext] Popup blocked! Triggering seamless redirect fallback...");
+          toast.info("Redirecting you to Google login screen...");
+          
+          signInWithRedirect(auth, provider)
+            .catch((redirectErr: any) => {
+              console.error("[AuthContext] Redirect fallback failed too:", redirectErr);
+              toast.error("Redirect fallback failed! Please allow popups or check browser permissions.");
+              setLoading(false);
+            });
         } else if (popupErr.code === 'auth/unauthorized-domain') {
           toast.error("Vercel domain is unauthorized in Firebase Console!");
+          setLoading(false);
         } else {
-          toast.error(`Login trigger failed: ${popupErr.message || 'Please check network connections.'}`);
+          toast.error(`Login failed: ${popupErr.message || 'Please check network connections.'}`);
+          setLoading(false);
         }
       });
   };
@@ -202,7 +235,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     try {
       const deviceSig = getDeviceSignature();
-      const userDocRef = doc(db, 'users', user.uid);
+      const userDocRef = doc(safeDb, 'users', user.uid);
 
       await updateDoc(userDocRef, {
         phoneNumber: sanitizedPhone,
