@@ -30,7 +30,7 @@ const auth = getAuth(app);
 const db = getFirestore(app, "ai-studio-e12d6e76-8aa2-4bd4-96b2-ed235287a5c2");
 
 export const postService = {
-  // 1. Sabhi society noticeboard posts ko naye se purane ke order mein fetch karta hai
+  // 1. Sabhi society noticeboard posts ko naye se purane ke order mein fetch karta hai aur fallbacks apply karta hai
   async getAllPosts() {
     const postsRef = collection(db, 'posts');
     const q = query(postsRef, orderBy('createdAt', 'desc'));
@@ -38,12 +38,19 @@ export const postService = {
     
     const posts: any[] = [];
     querySnapshot.forEach((doc) => {
-      posts.push({ id: doc.id, ...doc.data() });
+      const data = doc.data();
+      posts.push({ 
+        id: doc.id, 
+        ...data,
+        category: data.category || 'general', // Safeguard: Agar purane post me category nahi hai toh 'general' set karega taaki render crash na ho
+        imageUrls: data.imageUrls || (data.imageUrl ? [data.imageUrl] : []), // Safely parse single or multi images
+        comments: data.comments || [] // Safeguard: comments empty list default
+      });
     });
     return posts;
   },
 
-  // 2. Dashboard par updates ko live sync karne ke liye listener
+  // 2. Dashboard par updates ko live sync karne ke liye listener aur on-the-fly sanitization
   subscribeToPosts(callback: (posts: any[]) => void) {
     const postsRef = collection(db, 'posts');
     const q = query(postsRef, orderBy('createdAt', 'desc'));
@@ -51,7 +58,14 @@ export const postService = {
     return onSnapshot(q, (snapshot) => {
       const posts: any[] = [];
       snapshot.forEach((doc) => {
-        posts.push({ id: doc.id, ...doc.data() });
+        const data = doc.data();
+        posts.push({ 
+          id: doc.id, 
+          ...data,
+          category: data.category || 'general', // Safeguard for rendering crash
+          imageUrls: data.imageUrls || (data.imageUrl ? [data.imageUrl] : []),
+          comments: data.comments || []
+        });
       });
       callback(posts);
     }, (error) => {
@@ -100,7 +114,7 @@ export const postService = {
     const newPost = {
       title: title,
       content: content,
-      category: category,
+      category: category || 'general',
       imageUrl: imageUrls.length > 0 ? imageUrls[0] : null, // Pehla primary image
       imageUrls: imageUrls, // Slider/Gallery ke liye saare images
       authorId: currentUser.uid,
