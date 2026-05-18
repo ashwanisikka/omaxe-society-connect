@@ -11,33 +11,10 @@ class GeminiService {
     }
   }
 
-  async moderateImage(base64Image: string, mimeType: string): Promise<{ safe: boolean; reason?: string }> {
-    if (!this.ai) {
-      return { safe: true, reason: "AI not configured, bypassing moderation." };
-    }
+  // Helper function to safely clean and parse JSON responses from Gemini
+  private cleanAndParseJSON(rawResponse: string) {
     try {
-      const prompt = `Analyze this image for a residential community portal. Is there any nudity, graphic violence, or highly inappropriate content? Answer in JSON format: { "safe": boolean, "reason": "string if unsafe" }`;
-      
-      const response = await this.ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: [
-          prompt,
-          {
-            inlineData: {
-              data: base64Image.split(',')[1] || base64Image,
-              mimeType: mimeType
-            }
-          }
-        ]
-      });
-
-      const text = response.text || "{ \"safe\": true }";
-      return JSON.parse(text);
-    } catch (error) {
-      console.error("AI Moderation error:", error);
-      return { safe: true };
-    }
-  }
-}
-
-export const geminiService = new GeminiService();
+      let cleanString = rawResponse.trim();
+      // Remove leading markdown block indicators if present (like ```json)
+      if (cleanString.startsWith("```")) {
+        cleanString = cleanString.replace(/^
