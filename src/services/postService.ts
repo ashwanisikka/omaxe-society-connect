@@ -7,14 +7,12 @@ import {
   updateDoc, 
   deleteDoc,
   arrayUnion,
-  onSnapshot,
-  query,
-  orderBy
+  onSnapshot
 } from 'firebase/firestore';
 import { getAuth, signInAnonymously } from 'firebase/auth';
 import { initializeApp, getApps, getApp } from 'firebase/app';
 
-// Firebase configuration settings block
+// 1. Firebase configurations block
 const firebaseConfig = {
   projectId: "omaxe-heights-portal",
   appId: "1:398226441084:web:9c11756e4f220d8d275af9",
@@ -27,37 +25,62 @@ const firebaseConfig = {
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 const auth = getAuth(app);
 
-// Aapke default database se connect ho raha hai (No custom ID string)
-const db = getFirestore(app);
+// Custom database instance restore kiya hai taaki Database (default) not found error na aaye
+const db = getFirestore(app, "ai-studio-e12d6e76-8aa2-4bd4-96b2-ed235287a5c2");
+
+// Vercel deployment ke according strict path appId configuration
+const appId = "omaxe-society-connect";
+
+// Helper: Custom Timeout Guard jo "SYNCHRONIZING..." ko freeze hone se rokega
+const withTimeout = <T>(promise: Promise<T>, timeoutMs: number = 8000): Promise<T> => {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => 
+      setTimeout(() => reject(new Error("Database response timeout. Please check database permissions or network connectivity.")), timeoutMs)
+    )
+  ]);
+};
+
+// Helper: In-memory chronological sorting to prevent query index failures
+const sortPostsByDate = (postsArray: any[]) => {
+  return postsArray.sort((a, b) => {
+    const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    return dateB - dateA;
+  });
+};
 
 export const postService = {
-  // 1. Seedhe 'posts' collection se fetch karega aur rendering crash rokega
+  // 1. Fetch all posts from standard secure artifacts path
   async getAllPosts() {
-    const postsRef = collection(db, 'posts');
-    const q = query(postsRef, orderBy('createdAt', 'desc'));
-    const querySnapshot = await getDocs(q);
-    
-    const posts: any[] = [];
-    querySnapshot.forEach((doc) => {
-      const data = doc.data();
-      posts.push({ 
-        id: doc.id, 
-        ...data,
-        category: data.category || 'general', // Safeguard: rendering crash rokne ke liye
-        status: data.status || 'pending',
-        imageUrls: data.imageUrls || (data.imageUrl ? [data.imageUrl] : []),
-        comments: data.comments || []
+    try {
+      const postsRef = collection(db, 'artifacts', appId, 'public', 'data', 'posts');
+      const querySnapshot = await withTimeout(getDocs(postsRef));
+      
+      const posts: any[] = [];
+      querySnapshot.forEach((doc) => {
+        const data = doc.data();
+        posts.push({ 
+          id: doc.id, 
+          ...data,
+          category: data.category || 'general',
+          status: data.status || 'pending',
+          imageUrls: data.imageUrls || (data.imageUrl ? [data.imageUrl] : []),
+          comments: data.comments || []
+        });
       });
-    });
-    return posts;
+      return sortPostsByDate(posts);
+    } catch (err) {
+      console.error("Failed to load posts:", err);
+      throw err;
+    }
   },
 
-  // 2. Real-time sync ke liye subscribe listener
+  // 2. Real-time updates subscription under correct path rules
   subscribeToPosts(callback: (posts: any[]) => void) {
-    const postsRef = collection(db, 'posts');
-    const q = query(postsRef, orderBy('createdAt', 'desc'));
+    const postsRef = collection(db, 'artifacts', appId, 'public', 'data', 'posts');
     
-    return onSnapshot(q, (snapshot) => {
+    return onSnapshot(postsRef, (snapshot) => {
       const posts: any[] = [];
       snapshot.forEach((doc) => {
         const data = doc.data();
@@ -70,13 +93,13 @@ export const postService = {
           comments: data.comments || []
         });
       });
-      callback(posts);
+      callback(sortPostsByDate(posts));
     }, (error) => {
       console.error("Firebase subscription error:", error);
     });
   },
 
-  // AI response clean karne ka utility function
+  // Dynamic JSON parsing cleanup for Gemini integrations
   cleanAndParseJSON(rawResponse: string) {
     try {
       let cleanString = rawResponse.trim();
@@ -95,12 +118,12 @@ export const postService = {
       try {
         return JSON.parse(rawResponse);
       } catch (innerError) {
-        throw new Error("Invalid JSON formatting.");
+        throw new Error("Invalid JSON formatted configuration received.");
       }
     }
   },
 
-  // 3. Seedhe 'posts' collection me naya post create karega
+  // 3. Create post under secure artifacts/path with automated authentication check
   async createPost(
     title: string, 
     content: string, 
@@ -110,45 +133,46 @@ export const postService = {
   ) {
     let currentUser = auth.currentUser;
     if (!currentUser) {
-      const authCredential = await signInAnonymously(auth);
-      currentUser = authCredential.user;
+      const cred = await withTimeout(signInAnonymously(auth));
+      currentUser = cred.user;
     }
 
     const newPost = {
       title: title,
       content: content,
       category: category || 'general',
-      status: 'pending', // Direct rule bypass state
+      status: 'pending', // Validation rule compliant initial status
       imageUrl: imageUrls.length > 0 ? imageUrls[0] : null,
       imageUrls: imageUrls,
       authorId: currentUser.uid,
-      authorName: authorName || "Resident",
+      authorName: authorName || currentUser.displayName || "Resident",
       comments: [],
       createdAt: new Date().toISOString()
     };
 
-    const docRef = await addDoc(collection(db, 'posts'), newPost);
+    const postsRef = collection(db, 'artifacts', appId, 'public', 'data', 'posts');
+    const docRef = await withTimeout(addDoc(postsRef, newPost));
     return { id: docRef.id, ...newPost };
   },
 
-  // 4. Post status update karega (Approve / Reject)
+  // 4. Admin Status Updater (Approve / Reject)
   async updatePostStatus(postId: string, status: 'approved' | 'rejected') {
-    const postRef = doc(db, 'posts', postId);
-    await updateDoc(postRef, { status });
+    const postRef = doc(db, 'artifacts', appId, 'public', 'data', 'posts', postId);
+    await withTimeout(updateDoc(postRef, { status }));
   },
 
-  // 5. Post delete karega
+  // 5. Delete Post Action
   async deletePost(postId: string) {
-    const postRef = doc(db, 'posts', postId);
-    await deleteDoc(postRef);
+    const postRef = doc(db, 'artifacts', appId, 'public', 'data', 'posts', postId);
+    await withTimeout(deleteDoc(postRef));
   },
 
-  // 6. Comment add karega
+  // 6. Comments Array Insertion
   async addComment(postId: string, commentText: string) {
     let currentUser = auth.currentUser;
     if (!currentUser) {
-      const authCredential = await signInAnonymously(auth);
-      currentUser = authCredential.user;
+      const cred = await withTimeout(signInAnonymously(auth));
+      currentUser = cred.user;
     }
 
     const newComment = {
@@ -158,10 +182,10 @@ export const postService = {
       createdAt: new Date().toISOString()
     };
 
-    const postRef = doc(db, 'posts', postId);
-    await updateDoc(postRef, {
+    const postRef = doc(db, 'artifacts', appId, 'public', 'data', 'posts', postId);
+    await withTimeout(updateDoc(postRef, {
       comments: arrayUnion(newComment)
-    });
+    }));
 
     return newComment;
   }
