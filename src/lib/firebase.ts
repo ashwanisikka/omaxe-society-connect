@@ -1,87 +1,24 @@
-import { initializeApp } from 'firebase/app';
+import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
-import { initializeFirestore, doc, getDocFromServer } from 'firebase/firestore';
-import firebaseConfig from '../../firebase-applet-config.json';
+import { getFirestore } from 'firebase/firestore';
+import { getStorage } from 'firebase/storage';
 
-const app = initializeApp(firebaseConfig);
-// Use the firestoreDatabaseId from the config if available, otherwise default
-// Enable long polling to bypass potential websocket issues in the runtime environment
-const settings = {
-  experimentalForceLongPolling: true,
-  useFetchStreams: false,
-  ignoreUndefinedProperties: true
+// 1. Central Firebase project settings configuration
+const firebaseConfig = {
+  projectId: "omaxe-heights-portal",
+  appId: "1:398226441084:web:9c11756e4f220d8d275af9",
+  apiKey: "AIzaSyBdslph0X5MP0_UMMiL8dt_q9BLmxzJuw0",
+  authDomain: "omaxe-heights-portal.firebaseapp.com",
+  storageBucket: "omaxe-heights-portal.firebasestorage.app",
+  messagingSenderId: "398226441084"
 };
 
-const databaseId = (firebaseConfig as any).firestoreDatabaseId;
+const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+const auth = getAuth(app);
 
-// Initialize Firestore with settings
-// If databaseId is provided and not '(default)', use it.
-export const db = (databaseId && databaseId !== '(default)') 
-  ? initializeFirestore(app, settings, databaseId)
-  : initializeFirestore(app, settings);
+// CRITICAL FIX: Direct the entire main application connection to your custom named database!
+// This stops "@firebase/firestore: Firestore: Database (default) not found" crashes instantly.
+const db = getFirestore(app, "ai-studio-e12d6e76-8aa2-4bd4-96b2-ed235287a5c2");
+const storage = getStorage(app);
 
-export const auth = getAuth(app);
-
-// Error Handling Utility
-export enum OperationType {
-  CREATE = 'create',
-  UPDATE = 'update',
-  DELETE = 'delete',
-  LIST = 'list',
-  GET = 'get',
-  WRITE = 'write',
-}
-
-export interface FirestoreErrorInfo {
-  error: string;
-  operationType: OperationType;
-  path: string | null;
-  authInfo: {
-    userId?: string | null;
-    email?: string | null;
-    emailVerified?: boolean | null;
-    isAnonymous?: boolean | null;
-    tenantId?: string | null;
-    providerInfo?: {
-      providerId?: string | null;
-      email?: string | null;
-    }[];
-  }
-}
-
-export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData?.map(provider => ({
-        providerId: provider.providerId,
-        email: provider.email,
-      })) || []
-    },
-    operationType,
-    path
-  }
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
-}
-
-// Critical Connection Test
-async function testConnection() {
-  try {
-    // Attempt to fetch a non-existent document to trigger a network request
-    await getDocFromServer(doc(db, '_connection_test', 'test'));
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('unavailable')) {
-      console.error("Firestore connection unavailable. This may be a temporary network issue.");
-    } else {
-      // Expected failure if document doesn't exist, but confirms connectivity
-    }
-  }
-}
-
-testConnection();
+export { app, auth, db, storage };
