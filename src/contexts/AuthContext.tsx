@@ -47,6 +47,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   useEffect(() => {
+    // SAFETY TIMEOUT: If Firebase handshake takes too long or hangs, force loading to false
+    // so that the "Login with Google" button is NOT disabled and remains perfectly clickable!
+    const safetyTimer = setTimeout(() => {
+      console.log("Safety timeout triggered. Unlocking login button state...");
+      setLoading(false);
+    }, 3500);
+
     // Auth aur active resident session check boot time par
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       try {
@@ -80,10 +87,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         console.error("Auth session restore failed safely:", err);
       } finally {
         setLoading(false);
+        clearTimeout(safetyTimer);
       }
     });
 
-    return () => unsubscribe();
+    return () => {
+      unsubscribe();
+      clearTimeout(safetyTimer);
+    };
   }, []);
 
   // 1. Google sign-in trigger (Forces user account selection selector popup)
