@@ -12,7 +12,7 @@ import {
 import { getAuth, signInAnonymously, signInWithCustomToken } from 'firebase/auth';
 import { initializeApp, getApps, getApp } from 'firebase/app';
 
-// 1. Firebase settings configuration setup
+// 1. Firebase configuration settings block
 const firebaseConfig = {
   projectId: "omaxe-heights-portal",
   appId: "1:398226441084:web:9c11756e4f220d8d275af9",
@@ -22,130 +22,79 @@ const firebaseConfig = {
   messagingSenderId: "398226441084"
 };
 
-const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
-const auth = getAuth(app);
+// Main Central App & Auth instance (Used exclusively to read real user's profile details if they are logged in)
+const mainApp = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+const mainAuth = getAuth(mainApp);
 
-// Sandbox custom database instance connect ho raha hai
-const db = getFirestore(app, "ai-studio-e12d6e76-8aa2-4bd4-96b2-ed235287a5c2");
+// CRITICAL ISOLATION: Initialize an independent secondary Firebase app instance
+// to satisfy sandbox database auth rules WITHOUT hijacking the main app's global authentication state!
+// This prevents Google/Phone login redirects, "user-mismatch", and "Identity Mismatch (null)" crashes!
+const secondaryAppSuffix = "omaxe-post-isolated-sync";
+const secondaryApp = getApps().find(app => app.name === secondaryAppSuffix) 
+  || initializeApp(firebaseConfig, secondaryAppSuffix);
 
-// Safe authentication resolver (User-Mismatch crash ko block karne ke liye)
-let authResolve: (user: any) => void;
-const authPromise = new Promise((resolve) => {
-  authResolve = resolve;
-});
+const secondaryAuth = getAuth(secondaryApp);
+const db = getFirestore(secondaryApp, "ai-studio-e12d6e76-8aa2-4bd4-96b2-ed235287a5c2");
 
-// Listener active karega jo existing session ko protect karke clash ko block karega
-auth.onAuthStateChanged(async (user) => {
-  if (user) {
-    console.log("Active resident session found:", user.uid);
-    authResolve(user);
-  } else {
-    try {
-      console.log("No existing session, completing secure database handshake...");
-      const cred = await signInAnonymously(auth);
-      authResolve(cred.user);
-    } catch (err) {
-      console.error("Handshake validation failed:", err);
-      authResolve(null);
+// Production rules standard path appId
+const appId = "omaxe-society-connect";
+
+// Isolated Authentication Trigger (Satisfies Rule 3 on our isolated channel only)
+const ensureSecondaryAuth = async () => {
+  if (secondaryAuth.currentUser) return secondaryAuth.currentUser;
+  
+  try {
+    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+      const cred = await signInWithCustomToken(secondaryAuth, __initial_auth_token);
+      return cred.user;
+    } else {
+      const cred = await signInAnonymously(secondaryAuth);
+      return cred.user;
     }
+  } catch (err) {
+    console.error("Secondary sandbox auth handshake failed:", err);
+    return null;
   }
-});
-
-const ensureAuth = async () => {
-  return authPromise;
 };
 
-// Auto-Healing App ID Discovery (Permissions block ko bypass karne ka permanent solution)
-let validatedAppId = '';
-
-const getWorkingAppId = async () => {
-  if (validatedAppId) return validatedAppId;
-
-  // LocalStorage check karega agar koi working ID pehle se cached ho
-  const cachedId = localStorage.getItem('working_app_id');
-  if (cachedId) {
-    validatedAppId = cachedId;
-    return cachedId;
-  }
-
-  // Saare potential deployment candidates test karke working route dhoondhega
-  const candidates = [
-    typeof __app_id !== 'undefined' ? __app_id : '',
-    'omaxe-heights-portal',
-    'omaxe-society-connect',
-    'omaxe-society-connect-vercel',
-    'default-app-id'
-  ].filter(Boolean);
-
-  await ensureAuth();
-
-  for (const candidate of candidates) {
-    try {
-      const postsRef = collection(db, 'artifacts', candidate, 'public', 'data', 'posts');
-      await getDocs(postsRef); // Read permission validation query
-      
-      validatedAppId = candidate;
-      localStorage.setItem('working_app_id', candidate);
-      console.log("Verified database sync route:", candidate);
-      return candidate;
-    } catch (err: any) {
-      console.warn(`Database route validation failed for candidate: ${candidate}`, err.message);
-    }
-  }
-
-  // Fallback safe path
-  validatedAppId = candidates[0] || 'omaxe-society-connect';
-  return validatedAppId;
-};
-
-// Helper: Chronological sorting (Firebase complex index warnings avoid karne ke liye)
+// RULE 2 - In-Memory sorting wrapper (Prevents complex index query errors)
 const sortPostsByDate = (postsArray: any[]) => {
   return postsArray.sort((a, b) => {
     const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
     const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-    return dateB - dateA;
+    return dateB - dateA; // Newest first
   });
 };
 
 export const postService = {
-  // 1. Fetch posts securely with auto-detected route mapping
+  // 1. Fetch noticeboard posts securely using isolated database channel
   async getAllPosts() {
-    try {
-      await ensureAuth();
-      const workingId = await getWorkingAppId();
-      
-      const postsRef = collection(db, 'artifacts', workingId, 'public', 'data', 'posts');
-      const querySnapshot = await getDocs(postsRef);
-      
-      const posts: any[] = [];
-      querySnapshot.forEach((doc) => {
-        const data = doc.data();
-        posts.push({ 
-          id: doc.id, 
-          ...data,
-          category: data.category || 'general',
-          status: data.status || 'pending',
-          imageUrls: data.imageUrls || (data.imageUrl ? [data.imageUrl] : []),
-          comments: data.comments || []
-        });
+    await ensureSecondaryAuth();
+    const postsRef = collection(db, 'artifacts', appId, 'public', 'data', 'posts');
+    const querySnapshot = await getDocs(postsRef);
+    
+    const posts: any[] = [];
+    querySnapshot.forEach((doc) => {
+      const data = doc.data();
+      posts.push({ 
+        id: doc.id, 
+        ...data,
+        category: data.category || 'general',
+        status: data.status || 'pending',
+        imageUrls: data.imageUrls || (data.imageUrl ? [data.imageUrl] : []),
+        comments: data.comments || []
       });
+    });
 
-      return sortPostsByDate(posts);
-    } catch (err) {
-      console.error("Failed to read board posts:", err);
-      throw err;
-    }
+    return sortPostsByDate(posts);
   },
 
-  // 2. Real-time updates subscription sync without database lag
+  // 2. Real-time updates subscription sync using isolated channel (Will NEVER affect main Google login)
   subscribeToPosts(callback: (posts: any[]) => void) {
     let unsubscribe: (() => void) | null = null;
-    let active = true;
 
-    getWorkingAppId().then((workingId) => {
-      if (!active) return;
-
-      const postsRef = collection(db, 'artifacts', workingId, 'public', 'data', 'posts');
+    ensureSecondaryAuth().then(() => {
+      const postsRef = collection(db, 'artifacts', appId, 'public', 'data', 'posts');
       unsubscribe = onSnapshot(postsRef, (snapshot) => {
         const posts: any[] = [];
         snapshot.forEach((doc) => {
@@ -161,19 +110,18 @@ export const postService = {
         });
         callback(sortPostsByDate(posts));
       }, (error) => {
-        console.error("Subscription connection interrupted:", error);
+        console.error("Firebase subscription error in isolated post service channel:", error);
       });
     }).catch((err) => {
-      console.error("Subscription authentication mismatch:", err);
+      console.error("Auth initialization failed for subscription:", err);
     });
 
     return () => {
-      active = false;
       if (unsubscribe) unsubscribe();
     };
   },
 
-  // Gemini integration sanitization parser
+  // Parsing cleaner configuration
   cleanAndParseJSON(rawResponse: string) {
     try {
       let cleanString = rawResponse.trim();
@@ -197,7 +145,7 @@ export const postService = {
     }
   },
 
-  // 3. Database post creator mapping standard allowed writes
+  // 3. Create post securely under standard database path
   async createPost(
     title: string, 
     content: string, 
@@ -205,62 +153,60 @@ export const postService = {
     authorName: string, 
     imageUrls: string[]
   ) {
-    const user = await ensureAuth();
-    if (!user) throw new Error("Authentication state is not valid.");
-    
-    const workingId = await getWorkingAppId();
+    // Isolated channel active permission check
+    const secondaryUser = await ensureSecondaryAuth();
+    if (!secondaryUser) throw new Error("Secondary database handshake failed. Check configuration.");
+
+    // Retrieve active resident's information if logged in on the primary application thread
+    const currentUser = mainAuth.currentUser;
 
     const newPost = {
       title: title,
       content: content,
       category: category || 'general',
-      status: 'pending', // Validation rule bypass state
+      status: 'pending', // Validation rule compliant initial status
       imageUrl: imageUrls.length > 0 ? imageUrls[0] : null,
       imageUrls: imageUrls,
-      authorId: user.uid,
-      authorName: authorName || "Resident",
+      authorId: currentUser?.uid || secondaryUser.uid,
+      authorName: authorName || currentUser?.displayName || "Resident",
       comments: [],
       createdAt: new Date().toISOString()
     };
 
-    const postsRef = collection(db, 'artifacts', workingId, 'public', 'data', 'posts');
+    const postsRef = collection(db, 'artifacts', appId, 'public', 'data', 'posts');
     const docRef = await addDoc(postsRef, newPost);
     return { id: docRef.id, ...newPost };
   },
 
   // 4. Admin Action: Approve / Reject state update
   async updatePostStatus(postId: string, status: 'approved' | 'rejected') {
-    await ensureAuth();
-    const workingId = await getWorkingAppId();
-    
-    const postRef = doc(db, 'artifacts', workingId, 'public', 'data', 'posts', postId);
+    await ensureSecondaryAuth();
+    const postRef = doc(db, 'artifacts', appId, 'public', 'data', 'posts', postId);
     await updateDoc(postRef, { status });
   },
 
   // 5. Admin Action: Delete Post
   async deletePost(postId: string) {
-    await ensureAuth();
-    const workingId = await getWorkingAppId();
-    
-    const postRef = doc(db, 'artifacts', workingId, 'public', 'data', 'posts', postId);
+    await ensureSecondaryAuth();
+    const postRef = doc(db, 'artifacts', appId, 'public', 'data', 'posts', postId);
     await deleteDoc(postRef);
   },
 
-  // 6. Comments array updates
+  // 6. Isolated comments submission flow
   async addComment(postId: string, commentText: string) {
-    const user = await ensureAuth();
-    if (!user) throw new Error("Authentication is required to leave comments.");
-    
-    const workingId = await getWorkingAppId();
+    const secondaryUser = await ensureSecondaryAuth();
+    if (!secondaryUser) throw new Error("Secondary authorization failed. Cannot post comment.");
+
+    const currentUser = mainAuth.currentUser;
 
     const newComment = {
       text: commentText,
-      authorId: user.uid,
-      authorName: user.displayName || "Resident",
+      authorId: currentUser?.uid || secondaryUser.uid,
+      authorName: currentUser?.displayName || "Resident",
       createdAt: new Date().toISOString()
     };
 
-    const postRef = doc(db, 'artifacts', workingId, 'public', 'data', 'posts', postId);
+    const postRef = doc(db, 'artifacts', appId, 'public', 'data', 'posts', postId);
     await updateDoc(postRef, {
       comments: arrayUnion(newComment)
     });
