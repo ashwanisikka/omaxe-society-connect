@@ -4,6 +4,8 @@ import {
   signInWithPopup, 
   GoogleAuthProvider, 
   signOut,
+  setPersistence,
+  browserLocalPersistence,
   User
 } from 'firebase/auth';
 import { doc, getDoc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
@@ -15,10 +17,10 @@ interface AuthContextType {
   user: User | null;
   profile: UserProfile | null;
   loading: boolean;
-  loginWithGoogle: (e?: any) => Promise<void>;
-  signInWithGoogle: (e?: any) => Promise<void>; // Alias 1: UI button click compatibility
-  signIn: (e?: any) => Promise<void>;           // Alias 2: UI button click compatibility
-  login: (e?: any) => Promise<void>;            // Alias 3: UI button click compatibility
+  loginWithGoogle: (e?: any) => void;
+  signInWithGoogle: (e?: any) => void; // Alias 1: UI button click compatibility
+  signIn: (e?: any) => void;           // Alias 2: UI button click compatibility
+  login: (e?: any) => void;            // Alias 3: UI button click compatibility
   logout: () => Promise<void>;
   signOutUser: () => Promise<void>;      // Alias 4: UI logout action compatibility
   verifyAndBindPhone: (phoneNumber: string) => Promise<boolean>;
@@ -101,13 +103,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   useEffect(() => {
-    // Safety release to guarantee button click never remains frozen on loading delays
+    // 1. Establish persistent local state on startup
+    setPersistence(auth, browserLocalPersistence)
+      .then(() => {
+        console.log("[AuthContext] Session persistence initialized successfully to local storage.");
+      })
+      .catch((err) => {
+        console.error("[AuthContext] Failed to set session persistence:", err);
+      });
+
+    // 2. Safety release to guarantee button click never remains frozen on loading delays
     const loadTimeout = setTimeout(() => {
       console.log("[AuthContext] Safety check triggered. Login button controls active.");
       setLoading(false);
     }, 1500);
 
-    // Watch persistent auth status on boot up
+    // 3. Watch persistent auth status on boot up
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       try {
         if (currentUser) {
@@ -136,7 +147,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   // Central Google Sign-in trigger with ZERO async delay to prevent popup blocking!
-  const executeGoogleAuth = async (e?: any) => {
+  const executeGoogleAuth = (e?: any) => {
     // Immediate browser default prevent to stop page reloads during click events
     if (e) {
       if (typeof e.preventDefault === 'function') e.preventDefault();
@@ -149,24 +160,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: 'select_account' }); // Enforce manual chooser screen
     
-    try {
-      // Direct call ensures the popup blocker is completely bypassed!
-      console.log("[AuthContext] Launching direct Google Popup...");
-      const result = await signInWithPopup(auth, provider);
-      console.log("[AuthContext] Popup authorization success!");
-      setUser(result.user);
-      await handleUserLogin(result.user);
-    } catch (popupErr: any) {
-      console.error("[AuthContext] Direct popup login crashed:", popupErr);
-      if (popupErr.code === 'auth/unauthorized-domain') {
-        toast.error("Vercel domain is unauthorized in Firebase Console!");
-      } else if (popupErr.code === 'auth/popup-blocked') {
-        toast.error("Popup blocked! Kripya browser block list check kijiye.");
-      } else {
-        toast.error(`Login trigger failed: ${popupErr.message || 'Please check network connections.'}`);
-      }
-      setLoading(false);
-    }
+    // Direct synchronous call ensures the popup blocker is completely bypassed!
+    console.log("[AuthContext] Launching direct Google Popup...");
+    signInWithPopup(auth, provider)
+      .then(async (result) => {
+        console.log("[AuthContext] Popup authorization success!");
+        setUser(result.user);
+        await handleUserLogin(result.user);
+      })
+      .catch((popupErr: any) => {
+        console.error("[AuthContext] Direct popup login crashed:", popupErr);
+        setLoading(false);
+        if (popupErr.code === 'auth/popup-blocked') {
+          toast.error("Popup window blocked! Kripya settings mein popups allow karke click kijiye.");
+        } else if (popupErr.code === 'auth/unauthorized-domain') {
+          toast.error("Vercel domain is unauthorized in Firebase Console!");
+        } else {
+          toast.error(`Login trigger failed: ${popupErr.message || 'Please check network connections.'}`);
+        }
+      });
   };
 
   // Bind execution triggers to multiple alias properties
