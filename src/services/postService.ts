@@ -12,26 +12,24 @@ import {
 import { getAuth, signInAnonymously, signInWithCustomToken } from 'firebase/auth';
 import { initializeApp, getApps, getApp } from 'firebase/app';
 
-// 1. Firebase configuration setup (Production aur Preview modes ke liye safe fallback)
-const firebaseConfig = typeof __firebase_config !== 'undefined' 
-  ? JSON.parse(__firebase_config) 
-  : {
-      projectId: "omaxe-heights-portal",
-      appId: "1:398226441084:web:9c11756e4f220d8d275af9",
-      apiKey: "AIzaSyBdslph0X5MP0_UMMiL8dt_q9BLmxzJuw0",
-      authDomain: "omaxe-heights-portal.firebaseapp.com",
-      storageBucket: "omaxe-heights-portal.firebasestorage.app",
-      messagingSenderId: "398226441084"
-    };
+// 1. Firebase configuration block (Production aur local preview dono ke liye safe fallback)
+const firebaseConfig = {
+  projectId: "omaxe-heights-portal",
+  appId: "1:398226441084:web:9c11756e4f220d8d275af9",
+  apiKey: "AIzaSyBdslph0X5MP0_UMMiL8dt_q9BLmxzJuw0",
+  authDomain: "omaxe-heights-portal.firebaseapp.com",
+  storageBucket: "omaxe-heights-portal.firebasestorage.app",
+  messagingSenderId: "398226441084"
+};
 
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 const auth = getAuth(app);
 const db = getFirestore(app, "ai-studio-e12d6e76-8aa2-4bd4-96b2-ed235287a5c2");
 
-// RULE 1: Standard strict artifact path structure mapping
+// RULE 1: Strict path ke liye humein sahi platform appId ki zaroorat hai (omaxe-society-connect)
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'omaxe-society-connect';
 
-// RULE 3: Secure Auth Initialization wrapper
+// RULE 3: Secure Auth Initialization wrapper jo ensure karega ki Firebase write se pehle session active ho
 const ensureAuth = async () => {
   if (auth.currentUser) return auth.currentUser;
   
@@ -44,12 +42,19 @@ const ensureAuth = async () => {
   }
 };
 
-export const postService = {
-  // 1. Sabhi posts fetch karke in-memory chronological sorting karta hai (RULE 2 compliant)
-  async getAllPosts() {
-    const user = await ensureAuth();
-    if (!user) return [];
+// RULE 2: In-Memory sorting function (orderBy queries allowed nahi hain security rules mein)
+const sortPostsByDate = (postsArray: any[]) => {
+  return postsArray.sort((a, b) => {
+    const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    return dateB - dateA; // Naya post sabse pehle dikhega
+  });
+};
 
+export const postService = {
+  // 1. Sabhi posts standard secure path se fetch karke in-memory sort karta hai
+  async getAllPosts() {
+    await ensureAuth();
     const postsRef = collection(db, 'artifacts', appId, 'public', 'data', 'posts');
     const querySnapshot = await getDocs(postsRef);
     
@@ -59,28 +64,21 @@ export const postService = {
       posts.push({ 
         id: doc.id, 
         ...data,
-        category: data.category || 'general',
+        category: data.category || 'general', // Safeguard: rendering crash rokne ke liye
         status: data.status || 'pending',
         imageUrls: data.imageUrls || (data.imageUrl ? [data.imageUrl] : []),
         comments: data.comments || []
       });
     });
 
-    // In-memory sort (newest first) to avoid complex Firebase index requirements
-    return posts.sort((a, b) => {
-      const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-      const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-      return dateB - dateA;
-    });
+    return sortPostsByDate(posts);
   },
 
-  // 2. Real-time changes subscription with instant in-memory sorts (RULE 2 compliant)
+  // 2. Real-time changes subscribe karne ka listener without complex orderBy query
   subscribeToPosts(callback: (posts: any[]) => void) {
     let unsubscribe: (() => void) | null = null;
 
-    ensureAuth().then((user) => {
-      if (!user) return;
-
+    ensureAuth().then(() => {
       const postsRef = collection(db, 'artifacts', appId, 'public', 'data', 'posts');
       unsubscribe = onSnapshot(postsRef, (snapshot) => {
         const posts: any[] = [];
@@ -95,19 +93,12 @@ export const postService = {
             comments: data.comments || []
           });
         });
-
-        const sorted = posts.sort((a, b) => {
-          const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-          const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-          return dateB - dateA;
-        });
-
-        callback(sorted);
+        callback(sortPostsByDate(posts));
       }, (error) => {
-        console.error("Firebase subscription error:", error);
+        console.error("Firebase subscription error in posts:", error);
       });
     }).catch((err) => {
-      console.error("Firebase auth error in subscription:", err);
+      console.error("Firebase auth error in subscription wrapper:", err);
     });
 
     return () => {
@@ -115,7 +106,7 @@ export const postService = {
     };
   },
 
-  // Clean JSON response utility
+  // Gemini model response cleaner utility
   cleanAndParseJSON(rawResponse: string) {
     try {
       let cleanString = rawResponse.trim();
@@ -130,16 +121,16 @@ export const postService = {
       }
       return JSON.parse(cleanString.trim());
     } catch (e) {
-      console.error("Failed to parse sanitized AI response. Falling back to raw:", e);
+      console.error("Failed to parse JSON response:", e);
       try {
         return JSON.parse(rawResponse);
       } catch (innerError) {
-        throw new Error("Invalid JSON formatting received from AI validation routing.");
+        throw new Error("Invalid JSON formatted response.");
       }
     }
   },
 
-  // 3. Write-secure creation of post exactly mapping 5 args
+  // 3. Database mein naya post secure path par save karta hai (status: 'pending' validation pass karne ke liye)
   async createPost(
     title: string, 
     content: string, 
@@ -148,13 +139,13 @@ export const postService = {
     imageUrls: string[]
   ) {
     const user = await ensureAuth();
-    if (!user) throw new Error("Authentication session not valid. Please refresh page.");
+    if (!user) throw new Error("Authentication failed. Session activate nahi ho paya.");
 
     const newPost = {
       title: title,
       content: content,
       category: category || 'general',
-      status: 'pending', // Validation check mandatory state
+      status: 'pending', // Validation rule ke liye mandatory state
       imageUrl: imageUrls.length > 0 ? imageUrls[0] : null,
       imageUrls: imageUrls,
       authorId: user.uid,
@@ -163,33 +154,30 @@ export const postService = {
       createdAt: new Date().toISOString()
     };
 
+    // STRICT PATH: Rule standard format compliant write
     const postsRef = collection(db, 'artifacts', appId, 'public', 'data', 'posts');
     const docRef = await addDoc(postsRef, newPost);
     return { id: docRef.id, ...newPost };
   },
 
-  // 4. Admin Post Status Updates
+  // 4. Admin Action: Approve ya reject state handler
   async updatePostStatus(postId: string, status: 'approved' | 'rejected') {
-    const user = await ensureAuth();
-    if (!user) return;
-
+    await ensureAuth();
     const postRef = doc(db, 'artifacts', appId, 'public', 'data', 'posts', postId);
     await updateDoc(postRef, { status });
   },
 
-  // 5. Delete Post Action
+  // 5. Admin Action: Post delete karne ke liye
   async deletePost(postId: string) {
-    const user = await ensureAuth();
-    if (!user) return;
-
+    await ensureAuth();
     const postRef = doc(db, 'artifacts', appId, 'public', 'data', 'posts', postId);
     await deleteDoc(postRef);
   },
 
-  // 6. Comment Submission Wrapper
+  // 6. Comment Submission API wrapper
   async addComment(postId: string, commentText: string) {
     const user = await ensureAuth();
-    if (!user) throw new Error("You must be logged in to comment.");
+    if (!user) throw new Error("Comment karne ke liye login zaroori hai.");
 
     const newComment = {
       text: commentText,
