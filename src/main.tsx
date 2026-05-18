@@ -10,7 +10,9 @@ const firebaseConfig = {
   apiKey: "AIzaSyBdslph0X5MP0_UMMiL8dt_q9BLmxzJuw0",
   authDomain: "omaxe-heights-portal.firebaseapp.com",
   storageBucket: "omaxe-heights-portal.firebasestorage.app",
-  messagingSenderId: "398226441084"
+  messagingSenderId: "398226441084",
+  // Injected the correct custom database instance ID here
+  databaseId: "ai-studio-e12d6e76-8aa2-4bd4-96b2-ed235287a5c2"
 };
 
 // If Firebase is already initialized somewhere else, use that; otherwise, initialize it.
