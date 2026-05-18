@@ -10,10 +10,10 @@ import {
   arrayUnion,
   onSnapshot
 } from 'firebase/firestore';
-import { getAuth, getApp } from 'firebase/auth';
-import { initializeApp, getApps } from 'firebase/app';
+import { getAuth } from 'firebase/auth';
+import { initializeApp, getApps, getApp } from 'firebase/app';
 
-// Ensure Firebase App is initialized properly
+// Ensure Firebase App is initialized properly with correct exports
 const firebaseConfig = {
   projectId: "omaxe-heights-portal",
   appId: "1:398226441084:web:9c11756e4f220d8d275af9",
