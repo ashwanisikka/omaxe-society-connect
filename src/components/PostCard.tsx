@@ -28,6 +28,10 @@ export function PostCard({ post }: PostCardProps) {
     advertisement: { label: 'Ad', color: 'bg-purple-100 text-purple-700 border-purple-200' },
     general: { label: 'General', color: 'bg-green-100 text-green-700 border-green-200' },
     'lost-found': { label: 'Lost & Found', color: 'bg-orange-100 text-orange-700 border-orange-200' },
+    business: { label: 'Business', color: 'bg-indigo-100 text-indigo-700 border-indigo-200' },
+    professionals: { label: 'Professional', color: 'bg-sky-100 text-sky-700 border-sky-200' },
+    vendors: { label: 'Vendor', color: 'bg-teal-100 text-teal-700 border-teal-200' },
+    emergency: { label: 'Emergency', color: 'bg-rose-100 text-rose-700 border-rose-200' },
   };
 
   const statusLabels: Record<string, { label: string, color: string }> = {
@@ -36,8 +40,16 @@ export function PostCard({ post }: PostCardProps) {
     rejected: { label: 'Rejected', color: 'bg-red-100 text-red-700 border-red-200' },
   };
 
-  const cat = categoryLabels[post.category] || { label: post.category, color: 'bg-gray-100 text-gray-700' };
-  const stat = statusLabels[post.status];
+  // SAFEGUARD FALLBACKS: Stops 'Cannot read properties of undefined' crashes permanently
+  const cat = categoryLabels[post.category] || { 
+    label: post.category || 'General', 
+    color: 'bg-gray-100 text-gray-700 border-gray-200' 
+  };
+  
+  const stat = statusLabels[post.status || 'pending'] || { 
+    label: 'Pending', 
+    color: 'bg-gray-100 text-gray-700 border-gray-200' 
+  };
 
   const [isDeleting, setIsDeleting] = React.useState(false);
   const [confirmDelete, setConfirmDelete] = React.useState(false);
@@ -137,12 +149,12 @@ export function PostCard({ post }: PostCardProps) {
 
         <CardContent className="px-8 pb-6">
           <div className={`relative prose prose-slate prose-sm max-w-none text-slate-600 overflow-hidden break-words transition-all duration-700 ease-out ${!expanded ? 'max-h-24 sm:max-h-32' : 'max-h-[1000px]'}`}>
-            <ReactMarkdown>{post.content}</ReactMarkdown>
-            {!expanded && post.content.length > 150 && (
+            <ReactMarkdown>{post.content || ''}</ReactMarkdown>
+            {!expanded && post.content && post.content.length > 150 && (
               <div className="absolute bottom-0 left-0 right-0 h-20 bg-gradient-to-t from-white via-white/80 to-transparent pointer-events-none" />
             )}
           </div>
-          {post.content.length > 150 && (
+          {post.content && post.content.length > 150 && (
             <button 
               onClick={() => setExpanded(!expanded)}
               className="mt-6 text-[10px] font-black uppercase text-indigo-600 hover:text-white tracking-[0.2em] flex items-center gap-2 group/btn bg-indigo-50 px-5 py-2.5 rounded-2xl transition-all hover:bg-slate-900 hover:shadow-xl hover:shadow-indigo-100"
@@ -227,14 +239,14 @@ export function PostCard({ post }: PostCardProps) {
                 <Avatar className="h-10 w-10 border border-slate-100 shadow-sm rounded-2xl bg-indigo-50">
                   <AvatarImage src={getAvatarUrl(post.authorId, post.authorGender)} className="object-cover" />
                   <AvatarFallback className="bg-indigo-600 text-white font-black text-[10px]">
-                    {post.authorName?.charAt(0)}
+                    {post.authorName?.charAt(0) || 'U'}
                   </AvatarFallback>
                 </Avatar>
                 <div>
-                  <p className="text-xs font-black text-slate-900 leading-none uppercase tracking-widest">{post.authorName}</p>
+                  <p className="text-xs font-black text-slate-900 leading-none uppercase tracking-widest">{post.authorName || 'Anonymous'}</p>
                   <p className="text-[9px] font-bold text-slate-400 mt-1 uppercase tracking-widest flex items-center gap-1">
                     <Clock size={10} />
-                    {post.createdAt ? formatDistanceToNow(post.createdAt.toDate(), { addSuffix: true }) : 'Just now'}
+                    {post.createdAt && typeof post.createdAt.toDate === 'function' ? formatDistanceToNow(post.createdAt.toDate(), { addSuffix: true }) : 'Just now'}
                   </p>
                 </div>
               </div>
