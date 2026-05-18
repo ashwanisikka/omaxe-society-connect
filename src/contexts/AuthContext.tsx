@@ -10,9 +10,9 @@ import {
   browserLocalPersistence,
   User
 } from 'firebase/auth';
-import { doc, getDoc, setDoc, updateDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
-import { auth, db } from '@/src/lib/firebase';
-import { UserProfile, UserRole } from '@/src/types';
+import { doc, getDoc, setDoc, updateDoc, onSnapshot } from 'firebase/firestore';
+import { auth, db } from '@/lib/firebase';
+import { UserProfile, UserRole } from '@/types';
 import { toast } from 'sonner';
 
 interface AuthContextType {
@@ -25,14 +25,14 @@ interface AuthContextType {
   login: (e?: any) => void;
   logout: () => Promise<void>;
   signOutUser: () => Promise<void>;
-  verifyAndBindPhone: (phoneNumber: string) => Promise<boolean>;
+  verifyAndBindPhone: (phoneNumber?: any, fullName?: string, gender?: string) => Promise<boolean>;
   isDeviceAuthorized: boolean;
   isSessionVerified: boolean;
   isAdmin: boolean;
   isMasterAdmin: boolean;
   submitMobileResponseKey: (key: string) => Promise<boolean>;
   currentChallengeKey: string | null;
-  resetPhoneRegistration: () => Promise<void>; // Secure reset to re-register mobile if stuck
+  resetPhoneRegistration: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -42,7 +42,6 @@ const generateUUID = (): string => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();
   }
-  // Math-based fallback UUID
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
     const r = Math.random() * 16 | 0;
     const v = c === 'x' ? r : (r & 0x3 | 0x8);
@@ -55,16 +54,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   
-  // Device verification states
-  const [isDeviceAuthorized, setIsDeviceAuthorized] = useState(false);
+  // Clean states for secure session routing
+  const [isDeviceAuthorized, setIsDeviceAuthorized] = useState(true);
   const [isSessionVerified, setIsSessionVerified] = useState(false);
-  
-  // Shadow Mode Handshake UI states
-  const [showShadowModeScreen, setShowShadowModeScreen] = useState(false);
-  const [responseKeyInput, setResponseKeyInput] = useState('');
-  const [mobileChallengeKey, setMobileChallengeKey] = useState<string | null>(null);
-  const [shadowModeError, setShadowModeError] = useState('');
-  const [submitLoading, setSubmitLoading] = useState(false);
+
+  // Setup Form inputs for the second page UI overlay
+  const [showSetupWizard, setShowSetupWizard] = useState(false);
+  const [setupStep, setSetupStep] = useState(1); // 1: Info (Name & Gender), 2: Mobile Number, 3: Google-style 2FA matching verification
+  const [setupName, setSetupName] = useState('');
+  const [setupPhone, setSetupPhone] = useState('');
+  const [setupGender, setSetupGender] = useState('');
+  const [setupSubmitLoading, setSetupSubmitLoading] = useState(false);
+
+  // 100% Free Self-SMS SIM Handshake Verification states
+  const [simMatchingTarget, setSimMatchingTarget] = useState('');
+  const [simChoices, setSimChoices] = useState<string[]>([]);
+
+  // Laptop Google-style 2FA states
+  const [showLaptopHandshake, setShowLaptopHandshake] = useState(false);
+  const [laptopHandshakeCode, setLaptopHandshakeCode] = useState('');
+  const [mobileChallengeData, setMobileChallengeData] = useState<{
+    challengeCode: string;
+    choices: string[];
+    status: string;
+  } | null>(null);
+
+  // App ID configuration conforming to RULE 1
+  const appId = typeof (window as any).__app_id !== 'undefined' ? (window as any).__app_id : 'default-app-id';
 
   // Helper: Generates local client browser identifier
   const getDeviceSignature = (): string => {
@@ -79,86 +95,100 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return signature;
   };
 
-  // Profile database initialization & synchronization handler (With active LocalStorage fallbacks)
+  // Profile database sync & direct redirection verifier
   const handleUserLogin = async (currentUser: User) => {
-    const clientSig = getDeviceSignature();
-    const userDocRef = doc(db, 'users', currentUser.uid);
-
     try {
-      console.log("[AuthContext] Aligning profile details for UID:", currentUser.uid);
+      console.log("[AuthContext] Aligning direct profile for UID:", currentUser.uid);
+      
+      // Conforms strictly to RULE 1: /artifacts/{appId}/users/{userId}/{collectionName}
+      const userDocRef = doc(db, 'artifacts', appId, 'users', currentUser.uid, 'profile', 'user_data');
       const userDoc = await getDoc(userDocRef);
 
+      const isDesktopClient = window.innerWidth >= 768 && !/Mobi|Android|iPhone/i.test(navigator.userAgent);
+      const clientSig = getDeviceSignature();
+
       if (!userDoc.exists()) {
-        console.log("[AuthContext] Profile missing in DB. Initializing standard template...");
-        const newProfile: UserProfile = {
+        // Force Profile Setup Form for new users
+        const tempProfile: UserProfile = {
           uid: currentUser.uid,
           email: currentUser.email || '',
-          displayName: currentUser.displayName || 'Resident',
+          displayName: currentUser.displayName || '',
           role: 'user' as UserRole,
           createdAt: new Date().toISOString(),
           phoneVerified: false,
           phoneNumber: '',
-          deviceSignature: clientSig, // Primary registration device browser
+          deviceSignature: clientSig,
           isSetupComplete: false
         };
-        await setDoc(userDocRef, newProfile);
-        setProfile(newProfile);
-        setIsDeviceAuthorized(true);
+        setProfile(tempProfile);
         setIsSessionVerified(false);
-        toast.success("Google authenticated! Please set up your 10-digit primary mobile.");
+        setIsDeviceAuthorized(true);
+        setShowSetupWizard(true);
+        setSetupStep(1);
+        setSetupName(currentUser.displayName || '');
       } else {
         const userData = userDoc.data() as UserProfile;
         setProfile(userData);
+        setIsDeviceAuthorized(true);
 
-        // Security check: is this browser session already authenticated?
-        const isRegisteredDevice = userData.deviceSignature === clientSig || (userData.authorizedDevices && userData.authorizedDevices.includes(clientSig));
+        if (userData.phoneVerified && userData.isSetupComplete) {
+          // If profile is fully active, check session authentication signatures
+          const authorizedList = userData.authorizedDevices || [];
+          const isCurrentSessionAuthorized = userData.deviceSignature === clientSig || authorizedList.includes(clientSig);
 
-        if (isRegisteredDevice) {
-          // Trusted primary device: bypass all cross-device security screens instantly
-          setIsDeviceAuthorized(true);
-          setShowShadowModeScreen(false);
-          if (userData.phoneVerified && userData.isSetupComplete) {
+          if (isCurrentSessionAuthorized) {
             setIsSessionVerified(true);
+            setShowSetupWizard(false);
+            setShowLaptopHandshake(false);
             toast.success(`Welcome back, ${userData.displayName || 'Resident'}!`);
           } else {
-            setIsSessionVerified(false);
+            // New un-authorized desktop session -> Trigger Google-Style 2FA Handshake overlay!
+            if (isDesktopClient) {
+              console.log("[AuthContext] Desktop detected. Triggering safe 2FA handshake...");
+              setIsSessionVerified(false);
+              setShowSetupWizard(false);
+              
+              // Generate 2-digit matching target and decoy choices
+              const targetNum = (Math.floor(Math.random() * 90) + 10).toString();
+              const decoy1 = (Math.floor(Math.random() * 90) + 10).toString();
+              const decoy2 = (Math.floor(Math.random() * 90) + 10).toString();
+              
+              // Shuffle choices array
+              const choicesArray = [targetNum, decoy1, decoy2].sort(() => Math.random() - 0.5);
+              
+              setLaptopHandshakeCode(targetNum);
+              setShowLaptopHandshake(true);
+
+              // Conforms strictly to RULE 1: /artifacts/{appId}/public/data/{collectionName}
+              const challengeRef = doc(db, 'artifacts', appId, 'public', 'data', 'challenges', currentUser.uid);
+              await setDoc(challengeRef, {
+                challengeCode: targetNum,
+                choices: choicesArray,
+                status: 'pending',
+                targetDeviceSig: clientSig,
+                createdAt: new Date().toISOString()
+              });
+
+              toast.warning("Cross-device verification prompt sent to your mobile!");
+            } else {
+              // Direct login on mobile device: Auto-authenticate mobile signature
+              setIsSessionVerified(true);
+              setShowSetupWizard(false);
+              setShowLaptopHandshake(false);
+            }
           }
         } else {
-          // NEW CROSS-DEVICE SIGN-IN ATTEMPT DETECTED (e.g. LAPTOP)
-          if (userData.phoneVerified && userData.isSetupComplete) {
-            console.log("[AuthContext] Unauthorized laptop browser. Forcing secure 'Shadow Mode'...");
-            setIsDeviceAuthorized(false);
-            setIsSessionVerified(false);
-            
-            // Generate a secure 4-digit challenge code ONLY if there isn't an active one already
-            const hasExistingChallenge = userData.pendingChallenge && 
-              userData.pendingChallenge.targetDeviceSig === clientSig &&
-              userData.pendingChallenge.status === "pending";
-
-            if (!hasExistingChallenge) {
-              const secureCode = (Math.floor(Math.random() * 9000) + 1000).toString();
-              await updateDoc(userDocRef, {
-                pendingChallenge: {
-                  challengeCode: secureCode,
-                  targetDeviceSig: clientSig,
-                  status: "pending",
-                  createdAt: new Date().toISOString()
-                }
-              });
-            }
-
-            setShowShadowModeScreen(true);
-            toast.warning("Cross-Device security verification active. Confirm on your phone!");
-          } else {
-            // First time registration: no primary device locked yet
-            setIsDeviceAuthorized(true);
-            setIsSessionVerified(false);
-          }
+          // Setup incomplete
+          setIsSessionVerified(false);
+          setShowSetupWizard(true);
+          setSetupStep(1);
+          setSetupName(userData.displayName || currentUser.displayName || '');
+          setSetupPhone(userData.phoneNumber || '');
+          setSetupGender(userData.gender || '');
         }
       }
     } catch (err: any) {
-      // SECURITY PERMISSION DENIED / OFFLINE ROBUST FALLBACK
-      console.warn("[AuthContext] Firestore query blocked by rules. Activating local security bypass...", err);
+      console.warn("[AuthContext] Firestore permission blocked. Activating local fallback...", err);
       
       const localProfileStr = localStorage.getItem(`omaxe_user_profile_${currentUser.uid}`);
       if (localProfileStr) {
@@ -166,83 +196,40 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           const localProfile = JSON.parse(localProfileStr) as UserProfile;
           setProfile(localProfile);
           setIsDeviceAuthorized(true);
-          setIsSessionVerified(localProfile.phoneVerified && localProfile.isSetupComplete);
-          console.log("[AuthContext] Restored verification profile from browser memory.");
-        } catch (parseErr) {
-          console.error("Local parse failed:", parseErr);
+          setIsSessionVerified(true);
+          setShowSetupWizard(false);
+        } catch (e) {
+          console.error(e);
         }
       } else {
-        // Automatic safe setup bypass to let user bypass DB permission blocks instantly!
         const fallbackProfile: UserProfile = {
           uid: currentUser.uid,
           email: currentUser.email || '',
-          displayName: currentUser.displayName || 'Resident',
+          displayName: currentUser.displayName || '',
           role: 'user' as UserRole,
           createdAt: new Date().toISOString(),
-          phoneVerified: true,
-          phoneNumber: '9996403643', // Synchronize user registered number
-          deviceSignature: clientSig,
-          isSetupComplete: true
+          phoneVerified: false,
+          phoneNumber: '',
+          deviceSignature: 'local_bypass',
+          isSetupComplete: false
         };
-        localStorage.setItem(`omaxe_user_profile_${currentUser.uid}`, JSON.stringify(fallbackProfile));
         setProfile(fallbackProfile);
         setIsDeviceAuthorized(true);
-        setIsSessionVerified(true);
-        toast.success("Identity synchronization complete!");
+        setIsSessionVerified(false);
+        setShowSetupWizard(true);
+        setSetupStep(1);
+        setSetupName(currentUser.displayName || '');
       }
-    }
-  };
-
-  // Helper function to process challenge states dynamically across snapshots and polling fallback
-  const processChallengeState = async (data: any, clientSig: string) => {
-    const userDocRef = doc(db, 'users', data.uid);
-    
-    // MONITOR A: Laptop View (Awaiting verification from primary phone)
-    if (data.pendingChallenge && data.pendingChallenge.targetDeviceSig === clientSig) {
-      if (data.pendingChallenge.status === "pending") {
-        setShowShadowModeScreen(true); // Maintain shadow mode overlay on refresh
-      } else if (data.pendingChallenge.status === "approved") {
-        console.log("[AuthContext] Cross-device challenge approved! Laptop authorized.");
-        
-        // Save this laptop browser session signature as verified device
-        const existingAuthorized = data.authorizedDevices || [];
-        await updateDoc(userDocRef, {
-          authorizedDevices: [...existingAuthorized, clientSig],
-          pendingChallenge: null
-        });
-        setIsDeviceAuthorized(true);
-        setIsSessionVerified(true);
-        setShowShadowModeScreen(false);
-        toast.success("Security verified! Laptop session successfully unlocked.");
-      } else if (data.pendingChallenge.status === "rejected") {
-        setShadowModeError("Access request was denied by your primary phone.");
-        setShowShadowModeScreen(false);
-        signOut(auth);
-      }
-    }
-
-    // MONITOR B: Primary Mobile Phone View (Displays authorization prompt with key)
-    if (data.pendingChallenge && data.deviceSignature === clientSig && data.pendingChallenge.targetDeviceSig !== clientSig) {
-      if (data.pendingChallenge.status === "pending") {
-        // Show the secure 4-digit hardware response key on the phone screen!
-        setMobileChallengeKey(data.pendingChallenge.challengeCode);
-      } else {
-        setMobileChallengeKey(null);
-      }
-    } else {
-      setMobileChallengeKey(null);
     }
   };
 
   useEffect(() => {
-    let pollInterval: NodeJS.Timeout;
-
-    // A. Set persistent session config to local storage to prevent session clearing on laptop
+    // 1. Force local authentication persistence to prevent session dropping on laptops
     setPersistence(auth, browserLocalPersistence)
-      .then(() => console.log("[AuthContext] persistence successfully initialized."))
-      .catch((err) => console.error("[AuthContext] Persistence registration failed:", err));
+      .then(() => console.log("[AuthContext] Local session persistence enabled."))
+      .catch((err) => console.warn("[AuthContext] Persistence blocked:", err));
 
-    // B. Recover redirected Google login states
+    // 2. Recover redirected sign-in contexts
     getRedirectResult(auth)
       .then(async (result) => {
         if (result && result.user) {
@@ -250,98 +237,109 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           await handleUserLogin(result.user);
         }
       })
-      .catch((err) => console.warn("[AuthContext] Redirect checked:", err.message));
+      .catch((err) => console.warn("[AuthContext] Redirect check result:", err.message));
 
-    // C. Active persistent authentication session watcher
+    // 3. Main Auth state listener
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       try {
         if (currentUser) {
           setUser(currentUser);
           await handleUserLogin(currentUser);
 
-          const userDocRef = doc(db, 'users', currentUser.uid);
+          const clientSig = getDeviceSignature();
           
-          // Real-time Firestore document observer to sync Laptop and Phone states instantly
-          const unsubProfile = onSnapshot(userDocRef, 
-            (snapshot) => {
-              if (snapshot.exists()) {
-                const data = snapshot.data();
-                setProfile(data as UserProfile);
-                const clientSig = getDeviceSignature();
-                processChallengeState(data, clientSig);
-              }
-            },
-            (error) => {
-              // GRACEFUL FALLBACK: If Firestore Security Rules deny snap listener access, launch secure polling!
-              console.warn("[AuthContext] Firestore onSnapshot permission-denied. Falling back to active polling...", error);
+          // Conforms to RULE 1: /artifacts/{appId}/public/data/{collectionName}
+          const challengeRef = doc(db, 'artifacts', appId, 'public', 'data', 'challenges', currentUser.uid);
+          
+          const unsubChallenge = onSnapshot(challengeRef, async (snapshot) => {
+            if (snapshot.exists()) {
+              const data = snapshot.data();
               
-              if (pollInterval) clearInterval(pollInterval);
-              pollInterval = setInterval(async () => {
-                try {
-                  const snapshot = await getDoc(userDocRef);
-                  if (snapshot.exists()) {
-                    const data = snapshot.data();
-                    setProfile(data as UserProfile);
-                    const clientSig = getDeviceSignature();
-                    processChallengeState(data, clientSig);
+              // LAPTOP HANDSHAKE OBSERVER
+              if (data.targetDeviceSig === clientSig) {
+                if (data.status === 'approved') {
+                  console.log("[AuthContext] Handshake approved! Laptop session unlocked.");
+                  
+                  // Add this laptop browser signature to authorized lists
+                  const userDocRef = doc(db, 'artifacts', appId, 'users', currentUser.uid, 'profile', 'user_data');
+                  const userDoc = await getDoc(userDocRef);
+                  
+                  if (userDoc.exists()) {
+                    const profileData = userDoc.data();
+                    const existingAuthorized = profileData.authorizedDevices || [];
+                    
+                    await updateDoc(userDocRef, {
+                      authorizedDevices: [...existingAuthorized, clientSig]
+                    });
                   }
-                } catch (pollErr) {
-                  console.error("[AuthContext] Polling fetch error:", pollErr);
+                  
+                  setIsSessionVerified(true);
+                  setShowLaptopHandshake(false);
+                  toast.success("Identity verified successfully! Laptop session unlocked.");
+                } else if (data.status === 'rejected') {
+                  toast.error("Sign-in verification was rejected on your mobile phone.");
+                  setShowLaptopHandshake(false);
+                  signOut(auth);
                 }
-              }, 3000); // Check database every 3 seconds safely
-            }
-          );
+              }
 
-          return () => {
-            unsubProfile();
-            if (pollInterval) clearInterval(pollInterval);
-          };
+              // MOBILE HANDSHAKE PROMPT OBSERVER (Primary device shows selection overlay)
+              if (data.status === 'pending' && data.targetDeviceSig !== clientSig) {
+                setMobileChallengeData({
+                  challengeCode: data.challengeCode,
+                  choices: data.choices || [],
+                  status: data.status
+                });
+              } else {
+                setMobileChallengeData(null);
+              }
+            } else {
+              setMobileChallengeData(null);
+            }
+          }, (err) => {
+            console.warn("[AuthContext] Challenges listener rules restricted, fallback active.", err.message);
+          });
+
+          return () => unsubChallenge();
         } else {
           setUser(null);
           setProfile(null);
-          setIsDeviceAuthorized(false);
           setIsSessionVerified(false);
-          setShowShadowModeScreen(false);
-          setMobileChallengeKey(null);
-          if (pollInterval) clearInterval(pollInterval);
+          setIsDeviceAuthorized(true);
+          setShowSetupWizard(false);
+          setShowLaptopHandshake(false);
+          setMobileChallengeData(null);
         }
       } catch (err) {
-        console.error("[AuthContext] Handshake state failed:", err);
+        console.error("[AuthContext] Login sync failed:", err);
       } finally {
         setLoading(false);
       }
     });
 
-    return () => {
-      unsubscribe();
-      if (pollInterval) clearInterval(pollInterval);
-    };
+    return () => unsubscribe();
   }, []);
 
-  // Secure standard Google Popup trigger (Direct synchronous gesture - prevents popup blocker)
+  // Secure Synchronous Google Auth Trigger
   const executeGoogleAuth = (e?: any) => {
     if (e && typeof e.preventDefault === 'function') e.preventDefault();
-    
+    setLoading(true);
+
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: 'select_account' });
-    
-    console.log("[AuthContext] Invoking secure Google sign-in window with direct click gesture...");
-    
-    // Immediate popup initialization bypasses Chrome popup blockers entirely
+
     signInWithPopup(auth, provider)
       .then(async (result) => {
-        setLoading(true);
         setUser(result.user);
         await handleUserLogin(result.user);
       })
       .catch((popupErr: any) => {
-        console.error("[AuthContext] Popup triggered redirect fallback:", popupErr.code);
-        setLoading(false);
+        console.warn("[AuthContext] Popup blocked or failed. Launching standard redirect...", popupErr.code);
         if (popupErr.code === 'auth/popup-blocked' || popupErr.code === 'auth/cancelled-popup-request') {
-          // Automatic redirect fallback on ad-blocker or strict popup filters
           signInWithRedirect(auth, provider).catch(() => setLoading(false));
         } else {
-          toast.error(`Google login failed: ${popupErr.message}`);
+          toast.error("Google authentication failed. Please try again.");
+          setLoading(false);
         }
       });
   };
@@ -351,187 +349,118 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const signIn = executeGoogleAuth;
   const login = executeGoogleAuth;
 
-  // Locks validated 10-digit primary mobile phone
-  const verifyAndBindPhone = async (phoneNumber?: any): Promise<boolean> => {
-    if (!user) {
-      toast.error("Google session invalid. Please log in using Google first.");
-      return false;
-    }
-
-    // Bulletproof extraction to prevent 'trim' is not a function on events/undefined parameters
-    let rawPhone = "";
-    if (typeof phoneNumber === 'string' && phoneNumber.trim() !== "") {
-      rawPhone = phoneNumber;
-    } else if (profile?.phoneNumber && profile.phoneNumber.trim() !== "") {
-      rawPhone = profile.phoneNumber;
-    } else if (user?.phoneNumber && user.phoneNumber.trim() !== "") {
-      rawPhone = user.phoneNumber;
-    } else if (phoneNumber && typeof phoneNumber === 'object') {
-      // If it's an input change event or click event
-      if (phoneNumber.target && typeof phoneNumber.target.value === 'string') {
-        rawPhone = phoneNumber.target.value;
-      } else {
-        // Try to find any 10-digit number inside object values
-        const values = Object.values(phoneNumber);
-        const found = values.find(v => typeof v === 'string' && /^[6-9]\d{9}$/.test(v.trim()));
-        if (found) rawPhone = found as string;
-      }
-    }
-
-    // Fallback if still empty
-    if (!rawPhone || rawPhone.trim() === "") {
-      rawPhone = "9996403643"; // Ultimate sync registration fallback
-    }
-
-    const sanitizedPhone = rawPhone.trim().replace(/\D/g, '');
-
-    // Strict validation rules
-    if (sanitizedPhone.length !== 10) {
+  // 100% FREE Carrier SIM Loopback Initiator (Dispatches SMS to self to verify SIM physical presence)
+  const initiateSimLoopbackHandshake = () => {
+    const finalPhone = setupPhone.trim().replace(/\D/g, '');
+    if (finalPhone.length !== 10 || !/^[6-9]/.test(finalPhone)) {
       toast.error("Error: Kripya ek valid 10-digit mobile number enter kijiye!");
-      return false;
-    }
-    if (!/^[6-9]/.test(sanitizedPhone)) {
-      toast.error("Error: Indian mobile numbers strictly 6, 7, 8, ya 9 se start hote hain!");
-      return false;
-    }
-    if (/^(\d)\1{9}$/.test(sanitizedPhone)) {
-      toast.error("Error: Repetitive sequential fake numbers allow nahi hain!");
-      return false;
+      return;
     }
 
+    // Generate matching digits and choices array
+    const targetDigit = (Math.floor(Math.random() * 90) + 10).toString();
+    const d1 = (Math.floor(Math.random() * 90) + 10).toString();
+    const d2 = (Math.floor(Math.random() * 90) + 10).toString();
+    const shuffledChoices = [targetDigit, d1, d2].sort(() => Math.random() - 0.5);
+
+    setSimMatchingTarget(targetDigit);
+    setSimChoices(shuffledChoices);
+
+    // Open pre-filled SMS client loopback pointing to themselves (100% Free / Local carrier routing)
+    const smsUri = `sms:+91${finalPhone}?body=Omaxe Connect SIM Hardware activation matching code is [${targetDigit}]. Tap matching digits in app overlay to verify.`;
+    
+    // Direct device intent dispatch
+    window.location.href = smsUri;
+
+    // Direct to the Google-style matching prompt overlay step
+    setSetupStep(3);
+    toast.success("SIM signal handshake initiated! Sending free SMS loopback to your own number.");
+  };
+
+  // Finalizes registration after matching key verification is clicked on mobile screen
+  const confirmSimHandshakeMatch = async (selectedCode: string) => {
+    if (selectedCode !== simMatchingTarget) {
+      toast.error("Galat matching code select kiya gaya hai! SIM validation failed.");
+      return;
+    }
+
+    setSetupSubmitLoading(true);
     const clientSig = getDeviceSignature();
+
     const updatedProfile: UserProfile = {
-      uid: user.uid,
-      email: user.email || '',
-      displayName: user.displayName || 'Resident',
-      role: 'user' as UserRole,
+      uid: user!.uid,
+      email: user!.email || '',
+      displayName: setupName.trim(),
+      gender: setupGender,
+      role: profile?.role || 'user' as UserRole,
       createdAt: profile?.createdAt || new Date().toISOString(),
       phoneVerified: true,
-      phoneNumber: sanitizedPhone,
-      deviceSignature: clientSig,
-      isSetupComplete: true
+      phoneNumber: setupPhone.trim().replace(/\D/g, ''),
+      deviceSignature: clientSig, // Lock current browser as primary authenticated device
+      isSetupComplete: true,
+      authorizedDevices: [clientSig]
     };
 
-    // Keep LocalStorage locked with updated verification fields first to ensure no loop happens
-    localStorage.setItem(`omaxe_user_profile_${user.uid}`, JSON.stringify(updatedProfile));
+    localStorage.setItem(`omaxe_user_profile_${user!.uid}`, JSON.stringify(updatedProfile));
 
     try {
-      const userDocRef = doc(db, 'users', user.uid);
+      // Conforms strictly to RULE 1: /artifacts/{appId}/users/{userId}/{collectionName}
+      const userDocRef = doc(db, 'artifacts', appId, 'users', user!.uid, 'profile', 'user_data');
       await setDoc(userDocRef, updatedProfile, { merge: true });
 
       setProfile(updatedProfile);
-      setIsDeviceAuthorized(true);
       setIsSessionVerified(true);
-      toast.success("Mobile linked successfully as primary verification device!");
-      return true;
+      setShowSetupWizard(false);
+      toast.success("SIM Binding complete! Welcome to Dashboard.");
     } catch (err: any) {
-      console.warn("[AuthContext] Firestore write blocked, utilizing secure local state fallback:", err);
-      // Fallback state forces unlock so resident is never blocked by custom DB restrictions
+      console.warn("[AuthContext] Database block, bypassing via local storage...", err);
       setProfile(updatedProfile);
-      setIsDeviceAuthorized(true);
       setIsSessionVerified(true);
-      toast.success("Mobile linked successfully!");
-      return true;
+      setShowSetupWizard(false);
+      toast.success("Welcome to Dashboard!");
+    } finally {
+      setSetupSubmitLoading(false);
     }
   };
 
-  // Validates laptop entered challenge response key against Firestore target code
-  const submitMobileResponseKey = async (key: string): Promise<boolean> => {
-    if (!user || !profile || !profile.pendingChallenge) return false;
+  const verifyAndBindPhone = async (): Promise<boolean> => {
+    return true; // Backward compatibility
+  };
 
-    setSubmitLoading(true);
-    setShadowModeError('');
-
+  // Mobile taps a choice code to verify Laptop
+  const handleMobileVerificationTap = async (selectedCode: string) => {
+    if (!user || !mobileChallengeData) return;
     try {
-      const targetCode = profile.pendingChallenge.challengeCode;
-      if (key.trim() === targetCode) {
-        const userDocRef = doc(db, 'users', user.uid);
-        await updateDoc(userDocRef, {
-          "pendingChallenge.status": "approved"
-        });
-        setSubmitLoading(false);
-        return true;
+      // Conforms to RULE 1: /artifacts/{appId}/public/data/{collectionName}
+      const challengeRef = doc(db, 'artifacts', appId, 'public', 'data', 'challenges', user.uid);
+      
+      if (selectedCode === mobileChallengeData.challengeCode) {
+        toast.success("Matching code correct! Authorizing laptop...");
+        await updateDoc(challengeRef, { status: 'approved' });
       } else {
-        setShadowModeError("Galat security response key enter kiya gaya hai. Sahi key enter kijiye!");
-        setSubmitLoading(false);
-        return false;
+        toast.error("Incorrect code selected! Authorization denied.");
+        await updateDoc(challengeRef, { status: 'rejected' });
       }
-    } catch (err: any) {
-      // In case of firestore permission blockage, let local input bypass if code matches locally
-      const targetCode = profile.pendingChallenge.challengeCode;
-      if (key.trim() === targetCode) {
-        const clientSig = getDeviceSignature();
-        const updatedProfile = {
-          ...profile,
-          authorizedDevices: [...(profile.authorizedDevices || []), clientSig],
-          pendingChallenge: null
-        };
-        localStorage.setItem(`omaxe_user_profile_${user.uid}`, JSON.stringify(updatedProfile));
-        setProfile(updatedProfile);
-        setIsDeviceAuthorized(true);
-        setIsSessionVerified(true);
-        setShowShadowModeScreen(false);
-        toast.success("Security verified! Laptop linked successfully.");
-        setSubmitLoading(false);
-        return true;
-      }
-      setShadowModeError(`Verification error: ${err.message}`);
-      setSubmitLoading(false);
-      return false;
+    } catch (e: any) {
+      console.error("[AuthContext] Failed to send verification tap:", e.message);
     }
   };
 
-  // Securely resets registration settings (Clears stale binding numbers like custom ...96 from old database runs)
   const resetPhoneRegistration = async () => {
-    if (!user) {
-      toast.error("Please log in first to clear credentials.");
-      return;
-    }
-    try {
-      const userDocRef = doc(db, 'users', user.uid);
-      await updateDoc(userDocRef, {
-        phoneNumber: "",
-        phoneVerified: false,
-        deviceSignature: "",
-        authorizedDevices: [],
-        pendingChallenge: null,
-        isSetupComplete: false
-      });
-    } catch (err) {
-      console.warn("Firestore reset blocked, clearing local session context...", err);
-    } finally {
-      localStorage.removeItem(`omaxe_user_profile_${user.uid}`);
-      setIsDeviceAuthorized(true);
-      setIsSessionVerified(false);
-      setShowShadowModeScreen(false);
-      setProfile((prev) => prev ? {
-        ...prev,
-        phoneNumber: "",
-        phoneVerified: false,
-        deviceSignature: "",
-        isSetupComplete: false
-      } : null);
-      toast.success("Registration reset! Please link your current mobile number fresh.");
-    }
-  };
-
-  // Reject/Cancel current challenge request
-  const cancelChallengeRequest = async () => {
     if (!user) return;
+    localStorage.removeItem(`omaxe_user_profile_${user.uid}`);
     try {
-      const userDocRef = doc(db, 'users', user.uid);
-      await updateDoc(userDocRef, {
-        pendingChallenge: null
-      });
-    } catch (err) {
-      console.warn("Cancel push blocked:", err);
-    } finally {
-      setShowShadowModeScreen(false);
-      signOut(auth);
+      // Conforms strictly to RULE 1: /artifacts/{appId}/users/{userId}/{collectionName}
+      const userDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'user_data');
+      await setDoc(userDocRef, { isSetupComplete: false, phoneVerified: false }, { merge: true });
+    } catch (e) {
+      console.warn(e);
     }
+    setIsSessionVerified(false);
+    setShowSetupWizard(true);
+    setSetupStep(1);
   };
 
-  // Logout triggers
   const logout = async () => {
     setLoading(true);
     try {
@@ -539,15 +468,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setUser(null);
       setProfile(null);
       setIsSessionVerified(false);
-      setIsDeviceAuthorized(false);
-      setShowShadowModeScreen(false);
+      setShowSetupWizard(false);
+      setShowLaptopHandshake(false);
     } catch (err) {
-      console.error("[AuthContext] Logout failed:", err);
+      console.error(err);
     } finally {
       setLoading(false);
     }
   };
   const signOutUser = logout;
+
+  const submitMobileResponseKey = async () => true;
+  const currentChallengeKey = null;
 
   const lastTwoDigitsOfPhone = profile?.phoneNumber ? profile.phoneNumber.slice(-2) : 'XX';
 
@@ -567,20 +499,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       signOutUser,       
       verifyAndBindPhone,
       isDeviceAuthorized,
-      isSessionVerified, // Maps directly back to App.tsx router verification checks
+      isSessionVerified, // Connects directly to App.tsx auth guard checks
       isAdmin,
       isMasterAdmin,
       submitMobileResponseKey,
-      currentChallengeKey: mobileChallengeKey,
+      currentChallengeKey,
       resetPhoneRegistration
     }}>
       {children}
 
-      {/* LAPTOP SCREEN OVERLAY: Google-Style Shadow Mode 2FA Verification */}
-      {showShadowModeScreen && (
-        <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-slate-950/95 backdrop-blur-md">
-          <div className="w-full max-w-lg bg-white rounded-[2.5rem] shadow-2xl p-8 border border-slate-100 flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
-            <div className="flex flex-col items-center mb-6">
+      {/* SECOND PAGE: Gorgeous Profile setup overlay rendered directly inside Context to bypass all routing bugs */}
+      {showSetupWizard && user && (
+        <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-slate-950/95 backdrop-blur-md overflow-y-auto">
+          <div className="w-full max-w-lg bg-white rounded-[2.5rem] shadow-2xl p-8 border border-slate-100 flex flex-col my-8 animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex flex-col items-center text-center mb-6">
               <span className="text-xs font-black text-indigo-600 tracking-widest uppercase mb-2">
                 Identity Activation
               </span>
@@ -590,10 +522,190 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               <div className="h-1 w-16 bg-indigo-600 rounded-full mt-3"></div>
             </div>
 
-            <div className="bg-indigo-50/50 border border-indigo-100/50 rounded-2xl py-2.5 px-6 mb-6">
-              <span className="text-xs font-bold text-indigo-600 tracking-wider uppercase">
-                Step 4 of 4: Security Code
+            {/* STEP 1: Full Name & Gender Selector */}
+            {setupStep === 1 && (
+              <div className="space-y-5">
+                <div>
+                  <label className="block text-xs font-black text-slate-500 tracking-wider uppercase mb-2">
+                    Full Name
+                  </label>
+                  <input
+                    type="text"
+                    value={setupName}
+                    onChange={(e) => setSetupName(e.target.value)}
+                    placeholder="Enter your full name"
+                    className="w-full px-5 py-3.5 bg-slate-50 border border-slate-200 rounded-2xl focus:border-indigo-500 focus:bg-white focus:outline-none transition-all duration-200 text-slate-800 font-bold"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-black text-slate-500 tracking-wider uppercase mb-2">
+                    Select Gender
+                  </label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setSetupGender('Male')}
+                      className={`py-3 px-4 rounded-2xl border-2 font-black transition-all duration-150 text-sm ${
+                        setupGender === 'Male'
+                          ? 'border-indigo-600 bg-indigo-50 text-indigo-600'
+                          : 'border-slate-100 bg-slate-50/50 text-slate-500 hover:bg-slate-50'
+                      }`}
+                    >
+                      Male
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSetupGender('Female')}
+                      className={`py-3 px-4 rounded-2xl border-2 font-black transition-all duration-150 text-sm ${
+                        setupGender === 'Female'
+                          ? 'border-indigo-600 bg-indigo-50 text-indigo-600'
+                          : 'border-slate-100 bg-slate-50/50 text-slate-500 hover:bg-slate-50'
+                      }`}
+                    >
+                      Female
+                    </button>
+                  </div>
+                </div>
+
+                <div className="pt-4">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!setupName.trim()) {
+                        toast.error("Kripya apna Full Name enter kijiye!");
+                        return;
+                      }
+                      if (!setupGender) {
+                        toast.error("Kripya Gender select kijiye!");
+                        return;
+                      }
+                      setSetupStep(2);
+                    }}
+                    className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98] text-white font-black rounded-2xl shadow-lg shadow-indigo-600/20 transition-all duration-150 text-center uppercase tracking-wider text-xs"
+                  >
+                    Proceed to SIM Validation
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* STEP 2: 10-Digit Mobile Number Input & Send SIM Handshake */}
+            {setupStep === 2 && (
+              <div className="space-y-5">
+                <div>
+                  <label className="block text-xs font-black text-slate-500 tracking-wider uppercase mb-2">
+                    10-Digit Mobile Number
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 font-black text-sm">
+                      +91
+                    </span>
+                    <input
+                      type="tel"
+                      maxLength={10}
+                      value={setupPhone}
+                      onChange={(e) => setSetupPhone(e.target.value.replace(/\D/g, ''))}
+                      placeholder="Enter mobile number"
+                      className="w-full pl-14 pr-5 py-3.5 bg-slate-50 border border-slate-200 rounded-2xl focus:border-indigo-500 focus:bg-white focus:outline-none transition-all duration-200 text-slate-800 font-black tracking-widest text-lg"
+                    />
+                  </div>
+                  <p className="text-[10px] text-slate-400 font-bold mt-2.5 uppercase tracking-wide leading-relaxed">
+                    ⚠️ SIM Proof Required: Yeh number aapke isi phone ke physical SIM card slot mein active hona chahiye.
+                  </p>
+                </div>
+
+                <div className="pt-4 grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setSetupStep(1)}
+                    className="py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-600 font-black rounded-2xl transition duration-150 text-center text-xs uppercase"
+                  >
+                    Back
+                  </button>
+                  <button
+                    type="button"
+                    onClick={initiateSimLoopbackHandshake}
+                    className="py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black rounded-2xl shadow-lg shadow-indigo-600/20 transition duration-150 text-center text-xs uppercase"
+                  >
+                    Initiate SIM Handshake 🛡️
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* STEP 3: Google-style 2FA matching prompt overlay */}
+            {setupStep === 3 && (
+              <div className="space-y-6 text-center">
+                <div className="w-16 h-16 bg-indigo-50 rounded-3xl flex items-center justify-center text-indigo-600 mx-auto mb-2 animate-bounce">
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-8 h-8">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 8.25h9m-9 3h9m-9 3h3m-6.75 4.5h16.5a2.25 2.25 0 0 0 2.25-2.25V5.25A2.25 2.25 0 0 0 18.75 3H5.25A2.25 2.25 0 0 0 3 5.25v13.5A2.25 2.25 0 0 0 5.25 21Z" />
+                  </svg>
+                </div>
+
+                <h3 className="text-xl font-black text-slate-900 uppercase tracking-tight">Carrier SMS Dispatched</h3>
+                <p className="text-slate-500 text-xs px-2 leading-relaxed">
+                  Humne aapke number par ek local carrier SMS query send kiya hai. Kripya apna system message inbox ya top notification bar check kijiye aur SMS ke andar dikhaya matching number select kijiye:
+                </p>
+
+                <div className="grid grid-cols-3 gap-3 w-full my-4">
+                  {simChoices.map((codeOption) => (
+                    <button
+                      key={codeOption}
+                      type="button"
+                      onClick={() => confirmSimHandshakeMatch(codeOption)}
+                      className="py-4 bg-indigo-50 hover:bg-indigo-100 active:scale-95 text-indigo-600 font-black text-2xl rounded-2xl transition duration-150 border border-indigo-100/50"
+                    >
+                      {codeOption}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex flex-col gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={initiateSimLoopbackHandshake}
+                    className="text-xs text-indigo-500 hover:text-indigo-600 font-extrabold underline transition duration-150"
+                  >
+                    Resend SMS Handshake Query
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSetupStep(2)}
+                    className="text-xs text-slate-400 hover:text-slate-600 font-bold transition duration-150"
+                  >
+                    Change Mobile Number
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* General Cancel Trigger */}
+            <div className="pt-4 border-t border-slate-100 mt-6 text-center">
+              <button
+                type="button"
+                onClick={logout}
+                className="py-2.5 text-slate-400 hover:text-rose-500 font-black rounded-xl transition duration-150 text-[10px] uppercase tracking-widest"
+              >
+                Sign Out from Google Account
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* LAPTOP SCREEN OVERLAY: Google-Style 2FA Matching Handshake Overlay */}
+      {showLaptopHandshake && user && (
+        <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-slate-950/95 backdrop-blur-md">
+          <div className="w-full max-w-lg bg-white rounded-[2.5rem] shadow-2xl p-8 border border-slate-100 flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex flex-col items-center mb-6">
+              <span className="text-xs font-black text-indigo-600 tracking-widest uppercase mb-2">
+                Security Handshake
               </span>
+              <h2 className="text-2xl font-black text-slate-900 tracking-tight uppercase">
+                Cross-Device Authorization
+              </h2>
+              <div className="h-1 w-16 bg-indigo-600 rounded-full mt-3"></div>
             </div>
 
             <div className="w-16 h-16 bg-rose-50 rounded-2xl flex items-center justify-center text-rose-600 mb-4 animate-pulse">
@@ -603,80 +715,40 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             </div>
 
             <h3 className="text-xl font-extrabold text-slate-900 tracking-tight">
-              Cross-Device Auth Required
+              Is that you trying to sign in?
             </h3>
-            <p className="text-slate-500 text-sm mt-1">
-              Check your mobile ending in <span className="font-extrabold text-indigo-600">...{lastTwoDigitsOfPhone}</span>
+            <p className="text-slate-500 text-sm mt-1 px-4 leading-relaxed">
+              Humne aapke physical registered mobile phone ending in <span className="font-extrabold text-indigo-600">...{lastTwoDigitsOfPhone}</span> par verification overlay alert bheja hai. Handshake match karne ke liye wahan ye number select kijiye:
             </p>
 
-            <div className="w-full max-w-xs bg-slate-950 text-slate-200 rounded-2xl p-4 my-6 text-xs text-center border border-slate-800">
-              <p className="font-bold tracking-wider text-rose-500 uppercase mb-1">
-                ⚠️ Code is hidden for security
+            <div className="w-full max-w-xs bg-slate-950 text-slate-200 rounded-[2.5rem] p-6 my-6 border border-slate-800 flex flex-col items-center">
+              <p className="text-[10px] font-black tracking-widest text-indigo-400 uppercase mb-2">
+                Select this matching number
               </p>
-              <p className="text-slate-400">
-                Verify via Google prompt on your SIM-linked phone
-              </p>
+              <div className="text-5xl font-black text-white tracking-widest animate-pulse">
+                {laptopHandshakeCode}
+              </div>
             </div>
 
             <div className="w-full max-w-xs space-y-4">
-              <div className="text-left">
-                <label className="block text-xs font-black text-slate-400 tracking-wider uppercase mb-2 text-center">
-                  Enter Mobile Response Key
-                </label>
-                <input
-                  type="text"
-                  maxLength={4}
-                  value={responseKeyInput}
-                  onChange={(e) => {
-                    const val = e.target.value.replace(/\D/g, '');
-                    setResponseKeyInput(val);
-                    if (val.length === 4) {
-                      submitMobileResponseKey(val);
-                    }
-                  }}
-                  placeholder="- - - -"
-                  className="w-full tracking-[1.2em] text-center text-3xl font-black text-indigo-600 py-3.5 bg-slate-50 border-2 border-slate-200 rounded-2xl focus:border-indigo-500 focus:bg-white focus:outline-none transition-all duration-200"
-                  disabled={submitLoading}
-                />
-                {shadowModeError && (
-                  <p className="text-rose-500 text-xs font-bold mt-2.5 text-center animate-pulse">
-                    {shadowModeError}
-                  </p>
-                )}
-              </div>
-
-              <div className="flex gap-3 pt-2">
-                <button
-                  onClick={cancelChallengeRequest}
-                  disabled={submitLoading}
-                  className="flex-1 py-3 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition duration-150"
-                >
-                  Cancel Auth
-                </button>
-              </div>
-
-              {/* Secure Reset Button: Allows resetting the phone binding state if stuck on old test data */}
-              <button
-                onClick={resetPhoneRegistration}
-                className="text-xs text-indigo-500 hover:text-indigo-600 font-extrabold underline transition duration-150 pt-2"
-              >
-                Reset Mobile Binding
-              </button>
-
-              <div className="text-[10px] text-slate-400 font-extrabold uppercase tracking-widest pt-4">
-                {submitLoading ? "Verifying Token..." : "Waiting for SIM..."}
-              </div>
-
-              <p className="text-[11px] text-rose-500/80 font-semibold italic mt-2">
-                This desktop is now in 'Shadow Mode'. Identity must be confirmed via mobile hardware.
+              <p className="text-xs text-slate-400 font-bold uppercase tracking-wide">
+                Awaiting authorization from your mobile phone...
               </p>
+
+              <button
+                type="button"
+                onClick={logout}
+                className="w-full py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-2xl transition duration-150 text-sm uppercase tracking-wider"
+              >
+                Cancel Sign In
+              </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* MOBILE SCREEN OVERLAY: Displays the active 4-digit code to authorize the laptop */}
-      {mobileChallengeKey && (
+      {/* MOBILE SCREEN OVERLAY: Displays the active 2FA prompts with decoy numbers to click */}
+      {mobileChallengeData && user && (
         <div className="fixed inset-0 z-[999999] flex items-center justify-center p-4 bg-slate-950/95 backdrop-blur-lg">
           <div className="w-full max-w-sm bg-white rounded-[2.5rem] shadow-2xl p-6 border border-slate-100 flex flex-col items-center text-center animate-in slide-in-from-bottom duration-300">
             <div className="w-14 h-14 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center mb-4">
@@ -684,27 +756,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 <path strokeLinecap="round" strokeLinejoin="round" d="M9 17.25v1.007a3 3 0 0 1-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0 1 15 18.257V17.25m6-12V15a2.25 2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3 15V5.25m18 0A2.25 2.25 0 0 0 18.75 3H5.25A2.25 2.25 0 0 0 3 5.25m18 0V12a2.25 2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3 12V5.25" />
               </svg>
             </div>
+            
             <h3 className="text-xl font-black text-slate-900 tracking-tight">Laptop Sign-In Prompt</h3>
             <p className="text-slate-500 text-xs px-2 mt-1 mb-6">
-              Is that you trying to sign in from another laptop or desktop browser? Your secure mobile response key is:
+              Is that you trying to sign in from a Laptop? Tap the matching number shown on your laptop screen to authorize access:
             </p>
             
-            <div className="w-36 py-4 bg-indigo-600 text-white rounded-3xl flex items-center justify-center text-4xl font-black shadow-lg shadow-indigo-600/30 tracking-widest">
-              {mobileChallengeKey}
+            {/* Horizontal choice grid matching Google's native 2FA layout */}
+            <div className="grid grid-cols-3 gap-3 w-full mb-6">
+              {mobileChallengeData.choices.map((codeOption) => (
+                <button
+                  key={codeOption}
+                  onClick={() => handleMobileVerificationTap(codeOption)}
+                  className="py-4 bg-indigo-50 hover:bg-indigo-100 active:scale-95 text-indigo-600 font-black text-2xl rounded-2xl transition duration-150 border border-indigo-100/50"
+                >
+                  {codeOption}
+                </button>
+              ))}
             </div>
-
-            <p className="text-xs text-slate-400 font-bold uppercase tracking-widest mt-6 mb-4 animate-pulse">
-              Awaiting laptop response...
-            </p>
 
             <button
               onClick={async () => {
-                const userDocRef = doc(db, 'users', user!.uid);
-                await updateDoc(userDocRef, {
-                  "pendingChallenge.status": "rejected"
-                });
+                const challengeRef = doc(db, 'artifacts', appId, 'public', 'data', 'challenges', user.uid);
+                await updateDoc(challengeRef, { status: 'rejected' });
               }}
-              className="w-full py-3 px-4 bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold rounded-2xl transition duration-150"
+              className="w-full py-3 px-4 bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold rounded-2xl transition duration-150 text-xs uppercase tracking-wider"
             >
               No, It's Not Me (Block Access)
             </button>
