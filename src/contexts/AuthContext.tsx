@@ -11,8 +11,8 @@ import {
   User
 } from 'firebase/auth';
 import { doc, getDoc, setDoc, updateDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
-import { auth, db } from '@/src/lib/firebase';
-import { UserProfile, UserRole } from '@/src/types';
+import { auth, db } from '@/lib/firebase';
+import { UserProfile, UserRole } from '@/types';
 import { toast } from 'sonner';
 
 interface AuthContextType {
@@ -335,10 +335,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await handleUserLogin(result.user);
       })
       .catch((popupErr: any) => {
-        console.error("[AuthContext] Popup triggered redirect fallback:", popupErr.code);
+        console.error("[AuthContext] Popup blocked! Attempting redirect login fallback...", popupErr.code);
         setLoading(false);
-        if (popupErr.code === 'auth/popup-blocked') {
-          toast.error("Popup window blocked! Please allow popups for this site in your address bar icon, then click login.");
+        if (popupErr.code === 'auth/popup-blocked' || popupErr.code === 'auth/cancelled-popup-request') {
+          // Automatic seamless redirect fallback so login NEVER fails on popup blocker
+          signInWithRedirect(auth, provider).catch((redirectErr) => {
+            console.error("[AuthContext] Redirect failed too:", redirectErr);
+            toast.error("Google authentication completely blocked by browser settings.");
+          });
         } else {
           toast.error(`Google login failed: ${popupErr.message}`);
         }
@@ -523,10 +527,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
   const signOutUser = logout;
 
+  const lastTwoDigitsOfPhone = profile?.phoneNumber ? profile.phoneNumber.slice(-2) : 'XX';
+
   const isAdmin = profile?.role === 'admin' || user?.email?.toLowerCase() === 'ashwani.sikka@gmail.com';
   const isMasterAdmin = user?.email?.toLowerCase() === 'ashwani.sikka@gmail.com';
-
-  const lastTwoDigitsOfPhone = profile?.phoneNumber ? profile.phoneNumber.slice(-2) : 'XX';
 
   return (
     <AuthContext.Provider value={{ 
