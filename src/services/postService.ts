@@ -11,10 +11,10 @@ import {
   query,
   orderBy
 } from 'firebase/firestore';
-import { getAuth, signInAnonymously, signInWithCustomToken } from 'firebase/auth';
+import { getAuth, signInAnonymously } from 'firebase/auth';
 import { initializeApp, getApps, getApp } from 'firebase/app';
 
-// 1. Firebase configurations block
+// 1. Firebase configuration settings block
 const firebaseConfig = {
   projectId: "omaxe-heights-portal",
   appId: "1:398226441084:web:9c11756e4f220d8d275af9",
@@ -27,20 +27,22 @@ const firebaseConfig = {
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 const auth = getAuth(app);
 
-// AUTO-DETECTION: Check if the application is running inside our system's Preview Sandbox or Live Vercel Production
-const isSandbox = typeof __firebase_config !== 'undefined' || (typeof window !== 'undefined' && window.location.hostname.includes('gemini.google.com'));
+// Safe database initialization to prevent app crash if database configuration is missing
+let db: any;
+try {
+  // Try to use the default database first
+  db = getFirestore(app);
+} catch (e) {
+  console.warn("Falling back to custom database instance due to initialization error:", e);
+  db = getFirestore(app, "ai-studio-e12d6e76-8aa2-4bd4-96b2-ed235287a5c2");
+}
 
-// Dynamic Database Target:
-// Sandbox uses our custom preview instance ID to bypass database not found crashes
-// Production (Vercel) uses the default Firestore instance in your project omaxe-heights-portal
-const db = isSandbox 
-  ? getFirestore(app, "ai-studio-e12d6e76-8aa2-4bd4-96b2-ed235287a5c2")
-  : getFirestore(app);
-
+// Check if running in standard sandbox or production environment
+const isSandbox = typeof __firebase_config !== 'undefined';
 const sandboxAppId = typeof __app_id !== 'undefined' ? __app_id : 'omaxe-society-connect';
 
-// Helper to get correct Firestore Reference dynamically based on the active environment
-const getPostsCollectionRef = () => {
+// Safe Collection Reference mapping
+const getCollectionRef = () => {
   if (isSandbox) {
     return collection(db, 'artifacts', sandboxAppId, 'public', 'data', 'posts');
   } else {
@@ -48,7 +50,7 @@ const getPostsCollectionRef = () => {
   }
 };
 
-const getPostDocumentRef = (postId: string) => {
+const getDocumentRef = (postId: string) => {
   if (isSandbox) {
     return doc(db, 'artifacts', sandboxAppId, 'public', 'data', 'posts', postId);
   } else {
@@ -56,70 +58,78 @@ const getPostDocumentRef = (postId: string) => {
   }
 };
 
-// RULE 3 - Setup secure Sandbox auth session only when running inside sandbox environment
-const ensureSandboxAuth = async () => {
-  if (!isSandbox) return auth.currentUser;
-  if (auth.currentUser) return auth.currentUser;
-
-  try {
-    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-      const cred = await signInWithCustomToken(auth, __initial_auth_token);
-      return cred.user;
-    } else {
-      const cred = await signInAnonymously(auth);
-      return cred.user;
+// Safe Auth state checker
+const getAuthenticatedUser = (): Promise<any> => {
+  return new Promise((resolve) => {
+    if (auth.currentUser) {
+      resolve(auth.currentUser);
+      return;
     }
-  } catch (err) {
-    console.error("Sandbox authentication handshake failed:", err);
-    return null;
-  }
-};
-
-// RULE 2 - In-Memory chronological sorting fallback for clean index-free operations
-const sortPostsByDate = (postsArray: any[]) => {
-  return postsArray.sort((a, b) => {
-    const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-    const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-    return dateB - dateA; // Newest posts first
+    const unsubscribe = auth.onAuthStateChanged(async (user) => {
+      unsubscribe();
+      if (user) {
+        resolve(user);
+      } else {
+        try {
+          const cred = await signInAnonymously(auth);
+          resolve(cred.user);
+        } catch (err) {
+          console.error("Anonymous authentication failed:", err);
+          resolve(null);
+        }
+      }
+    });
   });
 };
 
 export const postService = {
-  // 1. Fetch board posts dynamically adapting order index constraints
+  // 1. Fetch posts with error handling fallback to keep UI stable
   async getAllPosts() {
-    await ensureSandboxAuth();
-    const postsRef = getPostsCollectionRef();
-    
-    let querySnapshot;
-    if (isSandbox) {
-      querySnapshot = await getDocs(postsRef);
-    } else {
-      const q = query(postsRef, orderBy('createdAt', 'desc'));
-      querySnapshot = await getDocs(q);
-    }
-    
-    const posts: any[] = [];
-    querySnapshot.forEach((doc) => {
-      const data = doc.data();
-      posts.push({ 
-        id: doc.id, 
-        ...data,
-        category: data.category || 'general',
-        status: data.status || 'pending',
-        imageUrls: data.imageUrls || (data.imageUrl ? [data.imageUrl] : []),
-        comments: data.comments || []
-      });
-    });
+    try {
+      await getAuthenticatedUser();
+      const postsRef = getCollectionRef();
+      
+      let querySnapshot;
+      try {
+        const q = isSandbox ? postsRef : query(postsRef, orderBy('createdAt', 'desc'));
+        querySnapshot = await getDocs(q);
+      } catch (err) {
+        console.warn("Query failed, retrying without order parameter:", err);
+        querySnapshot = await getDocs(postsRef);
+      }
 
-    return isSandbox ? sortPostsByDate(posts) : posts;
+      const posts: any[] = [];
+      querySnapshot.forEach((doc) => {
+        const data = doc.data();
+        posts.push({ 
+          id: doc.id, 
+          ...data,
+          category: data.category || 'general',
+          status: data.status || 'pending',
+          imageUrls: data.imageUrls || (data.imageUrl ? [data.imageUrl] : []),
+          comments: data.comments || []
+        });
+      });
+
+      // Simple client-side sorting fallback
+      return posts.sort((a, b) => {
+        const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return dateB - dateA;
+      });
+    } catch (error) {
+      console.error("Failed to load noticeboard posts:", error);
+      return [];
+    }
   },
 
-  // 2. Dynamic Real-time Sync adapter that respects user session boundaries
+  // 2. Real-time updates subscription sync
   subscribeToPosts(callback: (posts: any[]) => void) {
     let unsubscribe: (() => void) | null = null;
 
-    const setupSubscription = () => {
-      const postsRef = getPostsCollectionRef();
+    getAuthenticatedUser().then((user) => {
+      if (!user) return;
+      const postsRef = getCollectionRef();
       const q = isSandbox ? postsRef : query(postsRef, orderBy('createdAt', 'desc'));
 
       unsubscribe = onSnapshot(q, (snapshot) => {
@@ -135,24 +145,23 @@ export const postService = {
             comments: data.comments || []
           });
         });
-        callback(isSandbox ? sortPostsByDate(posts) : posts);
-      }, (error) => {
-        console.error("Firebase subscription sync error:", error);
-      });
-    };
 
-    if (isSandbox) {
-      ensureSandboxAuth().then(() => setupSubscription());
-    } else {
-      setupSubscription();
-    }
+        const sorted = posts.sort((a, b) => {
+          const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+          const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+          return dateB - dateA;
+        });
+        callback(sorted);
+      }, (error) => {
+        console.error("Real-time sync subscription error:", error);
+      });
+    });
 
     return () => {
       if (unsubscribe) unsubscribe();
     };
   },
 
-  // Gemini API response configurations dynamic cleaner
   cleanAndParseJSON(rawResponse: string) {
     try {
       let cleanString = rawResponse.trim();
@@ -167,16 +176,16 @@ export const postService = {
       }
       return JSON.parse(cleanString.trim());
     } catch (e) {
-      console.error("Failed to parse AI configuration payload:", e);
+      console.error("Failed to parse JSON configuration:", e);
       try {
         return JSON.parse(rawResponse);
       } catch (innerError) {
-        throw new Error("Invalid config received from response parsing rules.");
+        throw new Error("Invalid format config configuration.");
       }
     }
   },
 
-  // 3. Adaptive Post Creator (Supports both anonymous sandbox writes and active production user logins)
+  // 3. Create post securely under adaptive path collections
   async createPost(
     title: string, 
     content: string, 
@@ -184,10 +193,8 @@ export const postService = {
     authorName: string, 
     imageUrls: string[]
   ) {
-    const user = isSandbox ? await ensureSandboxAuth() : auth.currentUser;
-    
-    const authorId = user ? user.uid : "anonymous_resident";
-    const finalAuthorName = authorName || user?.displayName || "Resident";
+    const user = await getAuthenticatedUser();
+    if (!user) throw new Error("Authentication session not valid. Please login first.");
 
     const newPost = {
       title: title,
@@ -196,44 +203,44 @@ export const postService = {
       status: 'pending', // Validation rule compliant default state
       imageUrl: imageUrls.length > 0 ? imageUrls[0] : null,
       imageUrls: imageUrls,
-      authorId: authorId,
-      authorName: finalAuthorName,
+      authorId: user.uid,
+      authorName: authorName || user.displayName || "Resident",
       comments: [],
       createdAt: new Date().toISOString()
     };
 
-    const postsRef = getPostsCollectionRef();
+    const postsRef = getCollectionRef();
     const docRef = await addDoc(postsRef, newPost);
     return { id: docRef.id, ...newPost };
   },
 
   // 4. Update Post Status (Approve / Reject)
   async updatePostStatus(postId: string, status: 'approved' | 'rejected') {
-    const postRef = getPostDocumentRef(postId);
+    await getAuthenticatedUser();
+    const postRef = getDocumentRef(postId);
     await updateDoc(postRef, { status });
   },
 
   // 5. Delete Post Action
   async deletePost(postId: string) {
-    const postRef = getPostDocumentRef(postId);
+    await getAuthenticatedUser();
+    const postRef = getDocumentRef(postId);
     await deleteDoc(postRef);
   },
 
-  // 6. Comments array dynamic updater
+  // 6. Comments list updates
   async addComment(postId: string, commentText: string) {
-    const user = isSandbox ? await ensureSandboxAuth() : auth.currentUser;
-    
-    const authorId = user ? user.uid : "anonymous_resident";
-    const authorName = user?.displayName || "Resident";
+    const user = await getAuthenticatedUser();
+    if (!user) throw new Error("You must be logged in to comment.");
 
     const newComment = {
       text: commentText,
-      authorId: authorId,
-      authorName: authorName,
+      authorId: user.uid,
+      authorName: user.displayName || "Resident",
       createdAt: new Date().toISOString()
     };
 
-    const postRef = getPostDocumentRef(postId);
+    const postRef = getDocumentRef(postId);
     await updateDoc(postRef, {
       comments: arrayUnion(newComment)
     });
