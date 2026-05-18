@@ -11,8 +11,8 @@ import {
   User
 } from 'firebase/auth';
 import { doc, getDoc, setDoc, updateDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
-import { auth, db } from '@/lib/firebase';
-import { UserProfile, UserRole } from '@/types';
+import { auth, db } from '@/src/lib/firebase';
+import { UserProfile, UserRole } from '@/src/types';
 import { toast } from 'sonner';
 
 interface AuthContextType {
