@@ -11,8 +11,8 @@ import {
   User
 } from 'firebase/auth';
 import { doc, getDoc, setDoc, updateDoc, onSnapshot } from 'firebase/firestore';
-import { auth, db } from 'src/lib/firebase';
-import { UserProfile, UserRole } from 'src/types';
+import { auth, db } from '../lib/firebase';
+import { UserProfile, UserRole } from '../types';
 import { toast } from 'sonner';
 
 interface AuthContextType {
@@ -747,100 +747,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 Sign Out from Google Account
               </button>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* LAPTOP SCREEN OVERLAY: Google-Style 2FA Handshake Overlay */}
-      {showLaptopHandshake && user && (
-        <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-slate-950/95 backdrop-blur-md">
-          <div className="w-full max-w-lg bg-white rounded-[2.5rem] shadow-2xl p-8 border border-slate-100 flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
-            <div className="flex flex-col items-center mb-6">
-              <span className="text-xs font-black text-indigo-600 tracking-widest uppercase mb-2">
-                Security Handshake
-              </span>
-              <h2 className="text-2xl font-black text-slate-900 tracking-tight uppercase">
-                Cross-Device Authorization
-              </h2>
-              <div className="h-1 w-16 bg-indigo-600 rounded-full mt-3"></div>
-            </div>
-
-            <div className="w-16 h-16 bg-rose-50 rounded-2xl flex items-center justify-center text-rose-600 mb-4 animate-pulse">
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-8 h-8">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 1.5H8.25A2.25 2.25 0 0 0 6 3.75v16.5a2.25 2.25 0 0 0 2.25 2.25h7.5A2.25 2.25 0 0 0 18 20.25V3.75a2.25 2.25 0 0 0-2.25-2.25H13.5m-3 0V3h3V1.5m-3 0h3m-6 15h9m-9 3h9m-9-15h9" />
-              </svg>
-            </div>
-
-            <h3 className="text-xl font-extrabold text-slate-900 tracking-tight">
-              Is that you trying to sign in?
-            </h3>
-            <p className="text-slate-500 text-sm mt-1 px-4 leading-relaxed">
-              Humne aapke physical registered mobile phone ending in <span className="font-extrabold text-indigo-600">...{lastTwoDigitsOfPhone}</span> par verification overlay alert bheja hai. Handshake match karne ke liye wahan ye number select kijiye:
-            </p>
-
-            <div className="w-full max-w-xs bg-slate-950 text-slate-200 rounded-[2.5rem] p-6 my-6 border border-slate-800 flex flex-col items-center">
-              <p className="text-[10px] font-black tracking-widest text-indigo-400 uppercase mb-2">
-                Select this matching number
-              </p>
-              <div className="text-5xl font-black text-white tracking-widest animate-pulse">
-                {laptopHandshakeCode}
-              </div>
-            </div>
-
-            <div className="w-full max-w-xs space-y-4">
-              <p className="text-xs text-slate-400 font-bold uppercase tracking-wide">
-                Awaiting authorization from your mobile phone...
-              </p>
-
-              <button
-                type="button"
-                onClick={logout}
-                className="w-full py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-2xl transition duration-150 text-sm uppercase tracking-wider"
-              >
-                Cancel Sign In
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MOBILE SCREEN OVERLAY: 2FA Selection Dialog with decoy matching codes */}
-      {mobileChallengeData && user && (
-        <div className="fixed inset-0 z-[999999] flex items-center justify-center p-4 bg-slate-950/95 backdrop-blur-lg">
-          <div className="w-full max-w-sm bg-white rounded-[2.5rem] shadow-2xl p-6 border border-slate-100 flex flex-col items-center text-center animate-in slide-in-from-bottom duration-300">
-            <div className="w-14 h-14 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center mb-4">
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-7 h-7">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9 17.25v1.007a3 3 0 0 1-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0 1 15 18.257V17.25m6-12V15a2.25 2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3 15V5.25m18 0A2.25 2.25 0 0 0 18.75 3H5.25A2.25 2.25 0 0 0 3 5.25m18 0V12a2.25 2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3 12V5.25" />
-              </svg>
-            </div>
-            
-            <h3 className="text-xl font-black text-slate-900 tracking-tight">Laptop Sign-In Prompt</h3>
-            <p className="text-slate-500 text-xs px-2 mt-1 mb-6">
-              Is that you trying to sign in from a Laptop? Tap the matching number shown on your laptop screen to authorize access:
-            </p>
-            
-            {/* Horizontal choice grid matching Google's native 2FA layout */}
-            <div className="grid grid-cols-3 gap-3 w-full mb-6">
-              {mobileChallengeData.choices.map((codeOption) => (
-                <button
-                  key={codeOption}
-                  onClick={() => handleMobileVerificationTap(codeOption)}
-                  className="py-4 bg-indigo-50 hover:bg-indigo-100 active:scale-95 text-indigo-600 font-black text-2xl rounded-2xl transition duration-150 border border-indigo-100/50"
-                >
-                  {codeOption}
-                </button>
-              ))}
-            </div>
-
-            <button
-              onClick={async () => {
-                const challengeRef = doc(db, 'artifacts', appId, 'public', 'data', 'challenges', user.uid);
-                await updateDoc(challengeRef, { status: 'rejected' });
-              }}
-              className="w-full py-3 px-4 bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold rounded-2xl transition duration-150 text-xs uppercase tracking-wider"
-            >
-              No, It's Not Me (Block Access)
-            </button>
           </div>
         </div>
       )}
