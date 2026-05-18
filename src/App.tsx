@@ -1,21 +1,17 @@
-import React, { useState } from 'react';
-import { AuthProvider, useAuth } from './contexts/AuthContext';
-import { Dashboard } from './components/Dashboard';
-import { AuthScreen } from './components/AuthScreen';
-import { ProfileSetup } from './components/ProfileSetup';
+import React from 'react';
+import { AuthProvider, useAuth } from '@/src/contexts/AuthContext';
+import { Dashboard } from '@/src/components/Dashboard';
+import { AuthScreen } from '@/src/components/AuthScreen';
+import { ProfileSetup } from '@/src/components/ProfileSetup';
 import { Toaster } from 'sonner';
-import { doc, updateDoc } from 'firebase/firestore';
-import { db } from './lib/firebase';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './components/ui/card';
-import { Button } from './components/ui/button';
-import { Input } from './components/ui/input';
-import { Phone, ShieldCheck, User as UserIcon, Lock, ArrowLeft, KeyRound, Smartphone, Home } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
-import { toast } from 'sonner';
+import { Home } from 'lucide-react';
+import { motion } from 'motion/react';
 
+// Main Application Route Guard Controls
 function AppContent() {
-  const { user, profile, loading, isSessionVerified } = useAuth();
+  const { user, profile, loading, isSessionVerified, isDeviceAuthorized } = useAuth();
 
+  // 1. Initial Handshake loading state (Firebase dynamic token check)
   if (loading) {
     return (
       <div className="min-h-screen bg-white flex flex-col items-center justify-center p-6 text-center">
@@ -41,17 +37,23 @@ function AppContent() {
     );
   }
 
+  // 2. STEP 1: Google login validation check (Forces user to landing/login screen first)
   if (!user) {
     return <AuthScreen />;
   }
 
-  // Mandatory Setup & Session Verification Check:
-  const needsVerification = !profile || profile.isSetupComplete !== true || !isSessionVerified;
+  // 3. STEP 2: Device-binding and session security check
+  // isSessionVerified aur isDeviceAuthorized dono ke checks ko sync kiya hai routing loop bypass karne ke liye
+  const verified = isSessionVerified || isDeviceAuthorized;
+  const needsVerification = !profile || profile.isSetupComplete !== true || !verified;
   
   if (needsVerification) {
+    console.log("[Router] Identity setup or hardware handshake pending. Redirecting to ProfileSetup.");
     return <ProfileSetup />;
   }
 
+  // 4. STEP 3: All secure constraints satisfied! Show active Dashboard to resident
+  console.log("[Router] Security verified. Moving to resident portal board.");
   return <Dashboard />;
 }
 
