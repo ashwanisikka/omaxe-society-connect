@@ -2,6 +2,8 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { 
   onAuthStateChanged, 
   signInWithPopup, 
+  signInWithRedirect,
+  getRedirectResult,
   GoogleAuthProvider, 
   signOut,
   User
@@ -31,7 +33,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState(true);
   const [isDeviceAuthorized, setIsDeviceAuthorized] = useState(false);
 
-  // Helper: Device ka browser signature nikalne ke liye (SIM locking concept)
+  // Helper: Device signature coordinates configuration
   const getDeviceSignature = (): string => {
     let signature = localStorage.getItem('omaxe_device_signature');
     if (!signature) {
@@ -39,85 +41,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const agentParams = navigator.userAgent.replace(/\D/g, '');
       const uniqueUUID = crypto.randomUUID();
       
-      // Browser aur device coordinate se unique signature banana
       signature = `dev_${btoa(screenParams + agentParams).slice(0, 16)}_${uniqueUUID.slice(0, 8)}`;
       localStorage.setItem('omaxe_device_signature', signature);
     }
     return signature;
   };
 
-  useEffect(() => {
-    // SAFETY TIMEOUT: If Firebase handshake takes too long or hangs, force loading to false
-    // so that the "Login with Google" button is NOT disabled and remains perfectly clickable!
-    const safetyTimer = setTimeout(() => {
-      console.log("Safety timeout triggered. Unlocking login button state...");
-      setLoading(false);
-    }, 3500);
-
-    // Auth aur active resident session check boot time par
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      try {
-        if (currentUser) {
-          setUser(currentUser);
-          
-          const userDocRef = doc(db, 'users', currentUser.uid);
-          const userDoc = await getDoc(userDocRef);
-          const deviceSig = getDeviceSignature();
-
-          if (userDoc.exists()) {
-            const userData = userDoc.data() as UserProfile;
-            setProfile(userData);
-
-            // SECURE LOGIC: Agar phone verified hai aur same device signature hai, toh direct entry
-            if (userData.phoneVerified && userData.deviceSignature === deviceSig) {
-              setIsDeviceAuthorized(true);
-            } else {
-              setIsDeviceAuthorized(false);
-            }
-          } else {
-            setProfile(null);
-            setIsDeviceAuthorized(false);
-          }
-        } else {
-          setUser(null);
-          setProfile(null);
-          setIsDeviceAuthorized(false);
-        }
-      } catch (err) {
-        console.error("Auth session restore failed safely:", err);
-      } finally {
-        setLoading(false);
-        clearTimeout(safetyTimer);
-      }
-    });
-
-    return () => {
-      unsubscribe();
-      clearTimeout(safetyTimer);
-    };
-  }, []);
-
-  // 1. Google sign-in trigger (Forces user account selection selector popup)
-  const loginWithGoogle = async () => {
-    console.log("Google login button click ho gaya hai. Process start ho rahi hai...");
-    setLoading(true);
-    
-    const provider = new GoogleAuthProvider();
-    provider.setCustomParameters({ prompt: 'select_account' }); // Auto-bypass block karne ke liye prompt screen force karega
-    
+  // Helper function to safely process active user profiles inside direct custom database
+  const handleUserLogin = async (currentUser: User) => {
     try {
-      console.log("Google popup open karne ka try kar rahe hain...");
-      const result = await signInWithPopup(auth, provider);
-      const currentUser = result.user;
-      
-      console.log("Google login successful! Firebase authenticated user email:", currentUser.email);
-      
       const userDocRef = doc(db, 'users', currentUser.uid);
       const userDoc = await getDoc(userDocRef);
       const deviceSig = getDeviceSignature();
 
       if (!userDoc.exists()) {
-        console.log("Database mein user data nahi mila. Naya profile registration process init...");
         const newProfile: UserProfile = {
           uid: currentUser.uid,
           email: currentUser.email || '',
@@ -126,52 +63,104 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           createdAt: new Date().toISOString(),
           phoneVerified: false,
           phoneNumber: '',
-          deviceSignature: '', // Blank state jab tak active SIM number verified na ho
+          deviceSignature: '', // Empty awaiting setup phase verification
           isSetupComplete: false
         };
         await setDoc(userDocRef, newProfile);
         setProfile(newProfile);
         setIsDeviceAuthorized(false);
-        toast.success("Google Account authenticated! Apne device ka 10-digit number link kijiye.");
+        toast.success("Google Authentication verified. Please complete your physical device mobile binding.");
       } else {
         const userData = userDoc.data() as UserProfile;
         setProfile(userData);
-        console.log("Database mein active user account mil gaya:", userData.displayName);
         
-        // Check local signature match for auto-bypass
+        // CHECK HW LOCK MATCH: auto-bypass directly to dashboard if verified
         if (userData.phoneVerified && userData.deviceSignature === deviceSig) {
           setIsDeviceAuthorized(true);
           toast.success(`Welcome back, ${userData.displayName || 'Resident'}!`);
         } else {
           setIsDeviceAuthorized(false);
-          toast.warning("Naya device detected. Security hardware verification complete kijiye.");
+          toast.warning("New device detected or verification pending. Physical binding required.");
         }
       }
-    } catch (err: any) {
-      console.error("Google login call crash with error code:", err.code, "message:", err.message);
-      
-      if (err.code === 'auth/popup-blocked') {
-        toast.error("Vercel par login popup block ho gaya! Apne browser settings mein popups allow karke click kijiye.");
-      } else if (err.code === 'auth/popup-closed-by-user') {
-        toast.info("Aapne login select window close kar di thi.");
-      } else {
-        toast.error(`Authentication rejected: ${err.message || 'Apna Firebase configuration check kijiye.'}`);
-      }
-    } finally {
-      setLoading(false); // Button disable lock ko free karne ke liye loading state clear karna zaroori hai
+    } catch (dbErr) {
+      console.error("Failed to fetch or setup user record:", dbErr);
+      toast.error("Database initialization failed. Checking server connection.");
     }
   };
 
-  // 2. Lock current device hardware signature with validated mobile number (Anti-spoofing mechanism)
+  useEffect(() => {
+    // 1. Redirect Fallback Listener: Standard COOP browser restrictions resolution handler
+    getRedirectResult(auth)
+      .then(async (result) => {
+        if (result && result.user) {
+          console.log("Redirect login completed successfully!");
+          setUser(result.user);
+          await handleUserLogin(result.user);
+        }
+      })
+      .catch((err) => {
+        console.warn("Redirect result lookup bypass:", err);
+      });
+
+    // 2. Observer state trigger to monitor existing session tokens
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      try {
+        if (currentUser) {
+          setUser(currentUser);
+          await handleUserLogin(currentUser);
+        } else {
+          setUser(null);
+          setProfile(null);
+          setIsDeviceAuthorized(false);
+        }
+      } catch (err) {
+        console.error("Auth observer runtime crash:", err);
+      } finally {
+        setLoading(false);
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // 1. Google login trigger (With automatic hybrid redirect fallbacks)
+  const loginWithGoogle = async () => {
+    console.log("Starting Google Secure Account Authentication flow...");
+    setLoading(true);
+    
+    const provider = new GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: 'select_account' }); // Never skip direct manual selector window
+    
+    try {
+      // Step A: Attempt standard web popups
+      const result = await signInWithPopup(auth, provider);
+      setUser(result.user);
+      await handleUserLogin(result.user);
+    } catch (popupErr: any) {
+      console.warn("Popup blocked or COOP policy mismatch. Triggering redirect login...", popupErr.code);
+      
+      // Step B: Automatic redirection fallback for strict device browser restrictions
+      try {
+        await signInWithRedirect(auth, provider);
+      } catch (redirectErr: any) {
+        console.error("Redirect fallback failed too:", redirectErr);
+        toast.error("Login trigger failed. Please check browser privacy/popup permissions.");
+        setLoading(false); // Make sure button remains clickable on complete failure
+      }
+    }
+  };
+
+  // 2. Lock current device browser configuration metadata to the validated 10-digit number
   const verifyAndBindPhone = async (phoneNumber: string): Promise<boolean> => {
     if (!user) {
-      toast.error("Google authentication session not active. Google login kijiye.");
+      toast.error("Google session invalid. Please log in using Google first.");
       return false;
     }
 
     const sanitizedPhone = phoneNumber.trim().replace(/\D/g, '');
     if (sanitizedPhone.length < 10) {
-      toast.error("Kripya sahi 10-digit mobile number enter kijiye.");
+      toast.error("Please enter a valid 10-digit mobile number.");
       return false;
     }
 
@@ -179,7 +168,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const deviceSig = getDeviceSignature();
       const userDocRef = doc(db, 'users', user.uid);
 
-      // Save phone number and bind signature coordinates to Firestore
       await updateDoc(userDocRef, {
         phoneNumber: sanitizedPhone,
         phoneVerified: true,
@@ -197,16 +185,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       } : null);
 
       setIsDeviceAuthorized(true);
-      toast.success("Identity binding successful! Yeh browser ab verified dashboard access ke liye ready hai.");
+      toast.success("Identity activation successful! This device is now bound to your profile.");
       return true;
     } catch (err: any) {
-      console.error("Phone verification error:", err);
-      toast.error(`Verification binding failed: ${err.message || 'Database connection error'}`);
+      console.error("Phone registration lock failed:", err);
+      toast.error(`Verification binding failed: ${err.message || 'Database permissions blocked'}`);
       return false;
     }
   };
 
-  // 3. Close resident active session safely
+  // 3. User session logout trigger
   const logout = async () => {
     setLoading(true);
     try {
@@ -214,9 +202,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setUser(null);
       setProfile(null);
       setIsDeviceAuthorized(false);
-      toast.success("Session successfully closed.");
+      toast.success("Logged out successfully.");
     } catch (err) {
-      console.error("Sign out process failed:", err);
+      console.error("Logout process failed:", err);
     } finally {
       setLoading(false);
     }
