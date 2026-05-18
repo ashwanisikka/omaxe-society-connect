@@ -16,9 +16,23 @@ const firebaseConfig = {
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 const auth = getAuth(app);
 
-// CRITICAL FIX: Direct the entire main application connection to your custom named database!
-// This stops "@firebase/firestore: Firestore: Database (default) not found" crashes instantly.
+// Custom Named Database connection restoration
 const db = getFirestore(app, "ai-studio-e12d6e76-8aa2-4bd4-96b2-ed235287a5c2");
 const storage = getStorage(app);
+
+// COMPATIBILITY FIX: Restore OperationType enum for AuthContext
+export enum OperationType {
+  READ = 'READ',
+  WRITE = 'WRITE',
+  CREATE = 'CREATE',
+  UPDATE = 'UPDATE',
+  DELETE = 'DELETE'
+}
+
+// COMPATIBILITY FIX: Restore handleFirestoreError utility for AuthContext
+export const handleFirestoreError = (error: any, operation: string = 'operation') => {
+  console.error(`Firestore error during ${operation}:`, error);
+  return error;
+};
 
 export { app, auth, db, storage };
