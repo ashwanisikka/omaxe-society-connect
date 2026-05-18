@@ -11,8 +11,8 @@ import {
   User
 } from 'firebase/auth';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { auth, db } from '@/src/lib/firebase';
-import { UserProfile, UserRole } from '@/src/types';
+import { auth, db } from '@/lib/firebase';
+import { UserProfile, UserRole } from '@/types';
 import { toast } from 'sonner';
 
 interface AuthContextType {
@@ -54,13 +54,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
   
-  // Device validation states
+  // Clean states for secure session routing
   const [isDeviceAuthorized, setIsDeviceAuthorized] = useState(true);
   const [isSessionVerified, setIsSessionVerified] = useState(false);
 
   // Setup Form inputs for the second page UI overlay
   const [showSetupWizard, setShowSetupWizard] = useState(false);
-  const [setupStep, setSetupStep] = useState(1); // 1: Info (Name & Gender), 2: Mobile Number, 3: Google-style matching verification
+  const [setupStep, setSetupStep] = useState(1); // 1: Info (Name & Gender), 2: Mobile Number, 3: Google-style 2FA matching verification
   const [setupName, setSetupName] = useState('');
   const [setupPhone, setSetupPhone] = useState('');
   const [setupGender, setSetupGender] = useState('');
@@ -263,6 +263,52 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // Show step 3 verification overlay matching prompt on the phone screen
     setSetupStep(3);
     toast.success("SIM signal handshake initiated! Sending free SMS loopback to your own number.");
+  };
+
+  // Laptop Bypass verification trigger for standard zero-SIM setups
+  const handleLaptopBypass = async () => {
+    const finalPhone = setupPhone.trim().replace(/\D/g, '');
+    if (finalPhone.length !== 10 || !/^[6-9]/.test(finalPhone)) {
+      toast.error("Error: Laptop bypass ke liye ek valid 10-digit mobile number dalna zaroori hai!");
+      return;
+    }
+
+    setSetupSubmitLoading(true);
+    const clientSig = getDeviceSignature();
+
+    const updatedProfile: UserProfile = {
+      uid: user!.uid,
+      email: user!.email || '',
+      displayName: setupName.trim(),
+      gender: setupGender,
+      role: profile?.role || 'user' as UserRole,
+      createdAt: profile?.createdAt || new Date().toISOString(),
+      phoneVerified: true,
+      phoneNumber: finalPhone,
+      deviceSignature: clientSig,
+      isSetupComplete: true,
+      authorizedDevices: [clientSig]
+    };
+
+    localStorage.setItem(`omaxe_user_profile_${user!.uid}`, JSON.stringify(updatedProfile));
+
+    try {
+      const userDocRef = doc(db, 'artifacts', appId, 'users', user!.uid, 'profile', 'user_data');
+      await setDoc(userDocRef, updatedProfile, { merge: true });
+
+      setProfile(updatedProfile);
+      setIsSessionVerified(true);
+      setShowSetupWizard(false);
+      toast.success("Laptop verification bypass complete! Welcome to Dashboard.");
+    } catch (err: any) {
+      console.warn("[AuthContext] Firestore write bypassed via active local state.", err);
+      setProfile(updatedProfile);
+      setIsSessionVerified(true);
+      setShowSetupWizard(false);
+      toast.success("Welcome to Dashboard!");
+    } finally {
+      setSetupSubmitLoading(false);
+    }
   };
 
   // Verifies selected code match to completely finalize the user profile setup
@@ -481,20 +527,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                   </p>
                 </div>
 
-                <div className="pt-4 grid grid-cols-2 gap-3">
+                <div className="pt-4 flex flex-col gap-3">
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setSetupStep(1)}
+                      className="py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-600 font-black rounded-2xl transition duration-150 text-center text-xs uppercase"
+                    >
+                      Back
+                    </button>
+                    <button
+                      type="button"
+                      onClick={initiateSimLoopbackHandshake}
+                      className="py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black rounded-2xl shadow-lg shadow-indigo-600/20 transition duration-150 text-center text-xs uppercase"
+                    >
+                      Initiate SIM Handshake 🛡️
+                    </button>
+                  </div>
+
+                  {/* Laptop / Desktop bypass link */}
                   <button
                     type="button"
-                    onClick={() => setSetupStep(1)}
-                    className="py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-600 font-black rounded-2xl transition duration-150 text-center text-xs uppercase"
+                    onClick={handleLaptopBypass}
+                    className="w-full py-2.5 bg-slate-50 border border-slate-100 text-indigo-600 hover:bg-indigo-50 font-bold rounded-xl transition duration-150 text-center text-xs uppercase tracking-wide"
                   >
-                    Back
-                  </button>
-                  <button
-                    type="button"
-                    onClick={initiateSimLoopbackHandshake}
-                    className="py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black rounded-2xl shadow-lg shadow-indigo-600/20 transition duration-150 text-center text-xs uppercase"
-                  >
-                    Initiate SIM Handshake 🛡️
+                    💻 Laptop Setup Bypass (Direct Link)
                   </button>
                 </div>
               </div>
