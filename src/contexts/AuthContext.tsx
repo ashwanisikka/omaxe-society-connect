@@ -10,9 +10,9 @@ import {
   browserLocalPersistence,
   User
 } from 'firebase/auth';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { auth, db } from '@/lib/firebase';
-import { UserProfile, UserRole } from '@/types';
+import { doc, getDoc, setDoc, updateDoc, onSnapshot } from 'firebase/firestore';
+import { auth, db } from 'src/lib/firebase';
+import { UserProfile, UserRole } from 'src/types';
 import { toast } from 'sonner';
 
 interface AuthContextType {
@@ -70,6 +70,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [simMatchingTarget, setSimMatchingTarget] = useState('');
   const [simChoices, setSimChoices] = useState<string[]>([]);
 
+  // Laptop Google-style 2FA states
+  const [showLaptopHandshake, setShowLaptopHandshake] = useState(false);
+  const [laptopHandshakeCode, setLaptopHandshakeCode] = useState('');
+  const [mobileChallengeData, setMobileChallengeData] = useState<{
+    challengeCode: string;
+    choices: string[];
+    status: string;
+  } | null>(null);
+
   // App ID configuration conforming to RULE 1
   const appId = typeof (window as any).__app_id !== 'undefined' ? (window as any).__app_id : 'default-app-id';
 
@@ -94,6 +103,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Conforms strictly to RULE 1: /artifacts/{appId}/users/{userId}/{collectionName}
       const userDocRef = doc(db, 'artifacts', appId, 'users', currentUser.uid, 'profile', 'user_data');
       const userDoc = await getDoc(userDocRef);
+
+      const isDesktopClient = window.innerWidth >= 768 && !/Mobi|Android|iPhone/i.test(navigator.userAgent);
       const clientSig = getDeviceSignature();
 
       if (!userDoc.exists()) {
@@ -121,8 +132,51 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setIsDeviceAuthorized(true);
 
         if (userData.phoneVerified && userData.isSetupComplete) {
-          setIsSessionVerified(true);
-          setShowSetupWizard(false);
+          // If profile is fully active, check session authentication signatures
+          const authorizedList = userData.authorizedDevices || [];
+          const isCurrentSessionAuthorized = userData.deviceSignature === clientSig || authorizedList.includes(clientSig);
+
+          if (isCurrentSessionAuthorized) {
+            setIsSessionVerified(true);
+            setShowSetupWizard(false);
+            setShowLaptopHandshake(false);
+            toast.success(`Welcome back, ${userData.displayName || 'Resident'}!`);
+          } else {
+            // New un-authorized desktop session -> Trigger Google-Style 2FA Handshake overlay!
+            if (isDesktopClient) {
+              console.log("[AuthContext] Desktop detected. Triggering safe 2FA handshake...");
+              setIsSessionVerified(false);
+              setShowSetupWizard(false);
+              
+              // Generate 2-digit matching target and decoy choices
+              const targetNum = (Math.floor(Math.random() * 90) + 10).toString();
+              const decoy1 = (Math.floor(Math.random() * 90) + 10).toString();
+              const decoy2 = (Math.floor(Math.random() * 90) + 10).toString();
+              
+              // Shuffle choices array
+              const choicesArray = [targetNum, decoy1, decoy2].sort(() => Math.random() - 0.5);
+              
+              setLaptopHandshakeCode(targetNum);
+              setShowLaptopHandshake(true);
+
+              // Conforms strictly to RULE 1: /artifacts/{appId}/public/data/{collectionName}
+              const challengeRef = doc(db, 'artifacts', appId, 'public', 'data', 'challenges', currentUser.uid);
+              await setDoc(challengeRef, {
+                challengeCode: targetNum,
+                choices: choicesArray,
+                status: 'pending',
+                targetDeviceSig: clientSig,
+                createdAt: new Date().toISOString()
+              });
+
+              toast.warning("Cross-device verification prompt sent to your mobile!");
+            } else {
+              // Direct login on mobile device: Auto-authenticate mobile signature
+              setIsSessionVerified(true);
+              setShowSetupWizard(false);
+              setShowLaptopHandshake(false);
+            }
+          }
         } else {
           // Setup incomplete
           setIsSessionVerified(false);
@@ -191,12 +245,70 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (currentUser) {
           setUser(currentUser);
           await handleUserLogin(currentUser);
+
+          const clientSig = getDeviceSignature();
+          
+          // Conforms to RULE 1: /artifacts/{appId}/public/data/{collectionName}
+          const challengeRef = doc(db, 'artifacts', appId, 'public', 'data', 'challenges', currentUser.uid);
+          
+          const unsubChallenge = onSnapshot(challengeRef, async (snapshot) => {
+            if (snapshot.exists()) {
+              const data = snapshot.data();
+              
+              // LAPTOP HANDSHAKE WATCHER
+              if (data.targetDeviceSig === clientSig) {
+                if (data.status === 'approved') {
+                  console.log("[AuthContext] Handshake approved! Laptop session unlocked.");
+                  
+                  // Add laptop browser signature to approved lists
+                  const userDocRef = doc(db, 'artifacts', appId, 'users', currentUser.uid, 'profile', 'user_data');
+                  const userDoc = await getDoc(userDocRef);
+                  
+                  if (userDoc.exists()) {
+                    const profileData = userDoc.data();
+                    const existingAuthorized = profileData.authorizedDevices || [];
+                    
+                    await updateDoc(userDocRef, {
+                      authorizedDevices: [...existingAuthorized, clientSig]
+                    });
+                  }
+                  
+                  setIsSessionVerified(true);
+                  setShowLaptopHandshake(false);
+                  toast.success("Identity verified successfully! Laptop session unlocked.");
+                } else if (data.status === 'rejected') {
+                  toast.error("Sign-in verification was rejected on your mobile phone.");
+                  setShowLaptopHandshake(false);
+                  signOut(auth);
+                }
+              }
+
+              // MOBILE HANDSHAKE SELECTION WINDOW
+              if (data.status === 'pending' && data.targetDeviceSig !== clientSig) {
+                setMobileChallengeData({
+                  challengeCode: data.challengeCode,
+                  choices: data.choices || [],
+                  status: data.status
+                });
+              } else {
+                setMobileChallengeData(null);
+              }
+            } else {
+              setMobileChallengeData(null);
+            }
+          }, (err) => {
+            console.warn("[AuthContext] Challenges fallback tracking activated.", err.message);
+          });
+
+          return () => unsubChallenge();
         } else {
           setUser(null);
           setProfile(null);
           setIsSessionVerified(false);
           setIsDeviceAuthorized(true);
           setShowSetupWizard(false);
+          setShowLaptopHandshake(false);
+          setMobileChallengeData(null);
         }
       } catch (err) {
         console.error("[AuthContext] Login sync failed:", err);
@@ -361,6 +473,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return true; // Backward compatibility fallback
   };
 
+  // Mobile taps choice code to approve Desktop sign-in challenge
+  const handleMobileVerificationTap = async (selectedCode: string) => {
+    if (!user || !mobileChallengeData) return;
+    try {
+      // Conforms to RULE 1: /artifacts/{appId}/public/data/{collectionName}
+      const challengeRef = doc(db, 'artifacts', appId, 'public', 'data', 'challenges', user.uid);
+      
+      if (selectedCode === mobileChallengeData.challengeCode) {
+        toast.success("Matching code correct! Authorizing laptop...");
+        await updateDoc(challengeRef, { status: 'approved' });
+      } else {
+        toast.error("Incorrect code selected! Authorization denied.");
+        await updateDoc(challengeRef, { status: 'rejected' });
+      }
+    } catch (e: any) {
+      console.error("[AuthContext] Failed to send verification tap:", e.message);
+    }
+  };
+
   const resetPhoneRegistration = async () => {
     if (!user) return;
     localStorage.removeItem(`omaxe_user_profile_${user.uid}`);
@@ -384,6 +515,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setProfile(null);
       setIsSessionVerified(false);
       setShowSetupWizard(false);
+      setShowLaptopHandshake(false);
     } catch (err) {
       console.error(err);
     } finally {
@@ -394,6 +526,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const submitMobileResponseKey = async () => true;
   const currentChallengeKey = null;
+
+  const lastTwoDigitsOfPhone = profile?.phoneNumber ? profile.phoneNumber.slice(-2) : 'XX';
 
   const isAdmin = profile?.role === 'admin' || user?.email?.toLowerCase() === 'ashwani.sikka@gmail.com';
   const isMasterAdmin = user?.email?.toLowerCase() === 'ashwani.sikka@gmail.com';
@@ -425,7 +559,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-slate-950/95 backdrop-blur-md overflow-y-auto">
           <div className="w-full max-w-lg bg-white rounded-[2.5rem] shadow-2xl p-8 border border-slate-100 flex flex-col my-8 animate-in fade-in zoom-in-95 duration-200">
             <div className="flex flex-col items-center text-center mb-6">
-              <span className="text-xs font-black text-indigo-600 tracking-widest uppercase mb-2">
+              <span className="text-xs font-black text-indigo-600 tracking-test uppercase mb-2">
                 Identity Activation
               </span>
               <h2 className="text-2xl font-black text-slate-900 tracking-tight uppercase">
@@ -613,6 +747,100 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 Sign Out from Google Account
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* LAPTOP SCREEN OVERLAY: Google-Style 2FA Handshake Overlay */}
+      {showLaptopHandshake && user && (
+        <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-slate-950/95 backdrop-blur-md">
+          <div className="w-full max-w-lg bg-white rounded-[2.5rem] shadow-2xl p-8 border border-slate-100 flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex flex-col items-center mb-6">
+              <span className="text-xs font-black text-indigo-600 tracking-widest uppercase mb-2">
+                Security Handshake
+              </span>
+              <h2 className="text-2xl font-black text-slate-900 tracking-tight uppercase">
+                Cross-Device Authorization
+              </h2>
+              <div className="h-1 w-16 bg-indigo-600 rounded-full mt-3"></div>
+            </div>
+
+            <div className="w-16 h-16 bg-rose-50 rounded-2xl flex items-center justify-center text-rose-600 mb-4 animate-pulse">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-8 h-8">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 1.5H8.25A2.25 2.25 0 0 0 6 3.75v16.5a2.25 2.25 0 0 0 2.25 2.25h7.5A2.25 2.25 0 0 0 18 20.25V3.75a2.25 2.25 0 0 0-2.25-2.25H13.5m-3 0V3h3V1.5m-3 0h3m-6 15h9m-9 3h9m-9-15h9" />
+              </svg>
+            </div>
+
+            <h3 className="text-xl font-extrabold text-slate-900 tracking-tight">
+              Is that you trying to sign in?
+            </h3>
+            <p className="text-slate-500 text-sm mt-1 px-4 leading-relaxed">
+              Humne aapke physical registered mobile phone ending in <span className="font-extrabold text-indigo-600">...{lastTwoDigitsOfPhone}</span> par verification overlay alert bheja hai. Handshake match karne ke liye wahan ye number select kijiye:
+            </p>
+
+            <div className="w-full max-w-xs bg-slate-950 text-slate-200 rounded-[2.5rem] p-6 my-6 border border-slate-800 flex flex-col items-center">
+              <p className="text-[10px] font-black tracking-widest text-indigo-400 uppercase mb-2">
+                Select this matching number
+              </p>
+              <div className="text-5xl font-black text-white tracking-widest animate-pulse">
+                {laptopHandshakeCode}
+              </div>
+            </div>
+
+            <div className="w-full max-w-xs space-y-4">
+              <p className="text-xs text-slate-400 font-bold uppercase tracking-wide">
+                Awaiting authorization from your mobile phone...
+              </p>
+
+              <button
+                type="button"
+                onClick={logout}
+                className="w-full py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-2xl transition duration-150 text-sm uppercase tracking-wider"
+              >
+                Cancel Sign In
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MOBILE SCREEN OVERLAY: 2FA Selection Dialog with decoy matching codes */}
+      {mobileChallengeData && user && (
+        <div className="fixed inset-0 z-[999999] flex items-center justify-center p-4 bg-slate-950/95 backdrop-blur-lg">
+          <div className="w-full max-w-sm bg-white rounded-[2.5rem] shadow-2xl p-6 border border-slate-100 flex flex-col items-center text-center animate-in slide-in-from-bottom duration-300">
+            <div className="w-14 h-14 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center mb-4">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-7 h-7">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 17.25v1.007a3 3 0 0 1-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0 1 15 18.257V17.25m6-12V15a2.25 2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3 15V5.25m18 0A2.25 2.25 0 0 0 18.75 3H5.25A2.25 2.25 0 0 0 3 5.25m18 0V12a2.25 2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3 12V5.25" />
+              </svg>
+            </div>
+            
+            <h3 className="text-xl font-black text-slate-900 tracking-tight">Laptop Sign-In Prompt</h3>
+            <p className="text-slate-500 text-xs px-2 mt-1 mb-6">
+              Is that you trying to sign in from a Laptop? Tap the matching number shown on your laptop screen to authorize access:
+            </p>
+            
+            {/* Horizontal choice grid matching Google's native 2FA layout */}
+            <div className="grid grid-cols-3 gap-3 w-full mb-6">
+              {mobileChallengeData.choices.map((codeOption) => (
+                <button
+                  key={codeOption}
+                  onClick={() => handleMobileVerificationTap(codeOption)}
+                  className="py-4 bg-indigo-50 hover:bg-indigo-100 active:scale-95 text-indigo-600 font-black text-2xl rounded-2xl transition duration-150 border border-indigo-100/50"
+                >
+                  {codeOption}
+                </button>
+              ))}
+            </div>
+
+            <button
+              onClick={async () => {
+                const challengeRef = doc(db, 'artifacts', appId, 'public', 'data', 'challenges', user.uid);
+                await updateDoc(challengeRef, { status: 'rejected' });
+              }}
+              className="w-full py-3 px-4 bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold rounded-2xl transition duration-150 text-xs uppercase tracking-wider"
+            >
+              No, It's Not Me (Block Access)
+            </button>
           </div>
         </div>
       )}
