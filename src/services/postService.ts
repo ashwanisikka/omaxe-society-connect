@@ -10,10 +10,24 @@ import {
   arrayUnion,
   onSnapshot
 } from 'firebase/firestore';
-import { getAuth } from 'firebase/auth';
+import { getAuth, getApp } from 'firebase/auth';
+import { initializeApp, getApps } from 'firebase/app';
 
-const db = getFirestore();
-const auth = getAuth();
+// Ensure Firebase App is initialized properly
+const firebaseConfig = {
+  projectId: "omaxe-heights-portal",
+  appId: "1:398226441084:web:9c11756e4f220d8d275af9",
+  apiKey: "AIzaSyBdslph0X5MP0_UMMiL8dt_q9BLmxzJuw0",
+  authDomain: "omaxe-heights-portal.firebaseapp.com",
+  storageBucket: "omaxe-heights-portal.firebasestorage.app",
+  messagingSenderId: "398226441084"
+};
+
+const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+const auth = getAuth(app);
+
+// FORCING FIRESTORE TO USE THE CORRECT NATIVE CUSTOM DATABASE INSTANCE ID DIRECTLY
+const db = getFirestore(app, "ai-studio-e12d6e76-8aa2-4bd4-96b2-ed235287a5c2");
 
 export const postService = {
   // 1. Sabhi society noticeboard posts ko naye se purane ke order mein fetch karta hai
@@ -50,7 +64,6 @@ export const postService = {
     try {
       let cleanString = rawResponse.trim();
       
-      // Agar shuruat mein ``` hai toh use string slicing se clean karein
       if (cleanString.startsWith("```")) {
         cleanString = cleanString.slice(3).trim();
         if (cleanString.toLowerCase().startsWith("json")) {
@@ -58,7 +71,6 @@ export const postService = {
         }
       }
       
-      // Agar aakhiri mein ``` hai toh use clean karein
       if (cleanString.endsWith("```")) {
         cleanString = cleanString.slice(0, -3).trim();
       }
