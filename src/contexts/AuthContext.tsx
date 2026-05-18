@@ -32,6 +32,7 @@ interface AuthContextType {
   isMasterAdmin: boolean;
   submitMobileResponseKey: (key: string) => Promise<boolean>;
   currentChallengeKey: string | null;
+  resetPhoneRegistration: () => Promise<void>; // Secure bypass/reset to re-register mobile if stuck
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -146,7 +147,50 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  // Helper function to process challenge states dynamically across snapshots and polling fallback
+  const processChallengeState = async (data: any, clientSig: string) => {
+    const userDocRef = doc(db, 'users', data.uid);
+    
+    // MONITOR A: Laptop View (Awaiting verification from primary phone)
+    if (data.pendingChallenge && data.pendingChallenge.targetDeviceSig === clientSig) {
+      if (data.pendingChallenge.status === "pending") {
+        setShowShadowModeScreen(true); // Maintain shadow mode overlay on refresh
+      } else if (data.pendingChallenge.status === "approved") {
+        console.log("[AuthContext] Cross-device challenge approved! Laptop authorized.");
+        
+        // Save this laptop browser session signature as verified device
+        const existingAuthorized = data.authorizedDevices || [];
+        await updateDoc(userDocRef, {
+          authorizedDevices: [...existingAuthorized, clientSig],
+          pendingChallenge: null
+        });
+        setIsDeviceAuthorized(true);
+        setIsSessionVerified(true);
+        setShowShadowModeScreen(false);
+        toast.success("Security verified! Laptop session successfully unlocked.");
+      } else if (data.pendingChallenge.status === "rejected") {
+        setShadowModeError("Access request was denied by your primary phone.");
+        setShowShadowModeScreen(false);
+        signOut(auth);
+      }
+    }
+
+    // MONITOR B: Primary Mobile Phone View (Displays authorization prompt with key)
+    if (data.pendingChallenge && data.deviceSignature === clientSig && data.pendingChallenge.targetDeviceSig !== clientSig) {
+      if (data.pendingChallenge.status === "pending") {
+        // Show the secure 4-digit hardware response key on the phone screen!
+        setMobileChallengeKey(data.pendingChallenge.challengeCode);
+      } else {
+        setMobileChallengeKey(null);
+      }
+    } else {
+      setMobileChallengeKey(null);
+    }
+  };
+
   useEffect(() => {
+    let pollInterval: NodeJS.Timeout;
+
     // A. Set persistent session config to local storage to prevent session clearing on laptop
     setPersistence(auth, browserLocalPersistence)
       .then(() => console.log("[AuthContext] persistence successfully initialized."))
@@ -169,54 +213,43 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setUser(currentUser);
           await handleUserLogin(currentUser);
 
-          // Real-time Firestore document observer to sync Laptop and Phone states instantly
           const userDocRef = doc(db, 'users', currentUser.uid);
-          const unsubProfile = onSnapshot(userDocRef, (snapshot) => {
-            if (snapshot.exists()) {
-              const data = snapshot.data();
-              setProfile(data as UserProfile);
-              const clientSig = getDeviceSignature();
-
-              // MONITOR A: Laptop View (Awaiting verification from primary phone)
-              if (data.pendingChallenge && data.pendingChallenge.targetDeviceSig === clientSig) {
-                if (data.pendingChallenge.status === "pending") {
-                  setShowShadowModeScreen(true); // Maintain shadow mode overlay on refresh
-                } else if (data.pendingChallenge.status === "approved") {
-                  console.log("[AuthContext] Cross-device challenge approved! Laptop authorized.");
-                  
-                  // Save this laptop browser session signature as verified device
-                  const existingAuthorized = data.authorizedDevices || [];
-                  updateDoc(userDocRef, {
-                    authorizedDevices: [...existingAuthorized, clientSig],
-                    pendingChallenge: null
-                  }).then(() => {
-                    setIsDeviceAuthorized(true);
-                    setIsSessionVerified(true);
-                    setShowShadowModeScreen(false);
-                    toast.success("Security verified! Laptop session successfully unlocked.");
-                  });
-                } else if (data.pendingChallenge.status === "rejected") {
-                  setShadowModeError("Access request was denied by your primary phone.");
-                  setShowShadowModeScreen(false);
-                  signOut(auth);
-                }
+          
+          // Real-time Firestore document observer to sync Laptop and Phone states instantly
+          const unsubProfile = onSnapshot(userDocRef, 
+            (snapshot) => {
+              if (snapshot.exists()) {
+                const data = snapshot.data();
+                setProfile(data as UserProfile);
+                const clientSig = getDeviceSignature();
+                processChallengeState(data, clientSig);
               }
-
-              // MONITOR B: Primary Mobile Phone View (Displays authorization prompt with key)
-              if (data.pendingChallenge && data.deviceSignature === clientSig && data.pendingChallenge.targetDeviceSig !== clientSig) {
-                if (data.pendingChallenge.status === "pending") {
-                  // Show the secure 4-digit hardware response key on the phone screen!
-                  setMobileChallengeKey(data.pendingChallenge.challengeCode);
-                } else {
-                  setMobileChallengeKey(null);
+            },
+            (error) => {
+              // GRACEFUL FALLBACK: If Firestore Security Rules deny snap listener access, launch secure polling!
+              console.warn("[AuthContext] Firestore onSnapshot permission-denied. Falling back to active polling...", error);
+              
+              if (pollInterval) clearInterval(pollInterval);
+              pollInterval = setInterval(async () => {
+                try {
+                  const snapshot = await getDoc(userDocRef);
+                  if (snapshot.exists()) {
+                    const data = snapshot.data();
+                    setProfile(data as UserProfile);
+                    const clientSig = getDeviceSignature();
+                    processChallengeState(data, clientSig);
+                  }
+                } catch (pollErr) {
+                  console.error("[AuthContext] Polling fetch error:", pollErr);
                 }
-              } else {
-                setMobileChallengeKey(null);
-              }
+              }, 3000); // Check database every 3 seconds safely
             }
-          });
+          );
 
-          return () => unsubProfile();
+          return () => {
+            unsubProfile();
+            if (pollInterval) clearInterval(pollInterval);
+          };
         } else {
           setUser(null);
           setProfile(null);
@@ -224,6 +257,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setIsSessionVerified(false);
           setShowShadowModeScreen(false);
           setMobileChallengeKey(null);
+          if (pollInterval) clearInterval(pollInterval);
         }
       } catch (err) {
         console.error("[AuthContext] Handshake state failed:", err);
@@ -232,7 +266,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     });
 
-    return () => unsubscribe();
+    return () => {
+      unsubscribe();
+      if (pollInterval) clearInterval(pollInterval);
+    };
   }, []);
 
   // Secure standard Google Popup trigger (Direct synchronous gesture - prevents popup blocker)
@@ -349,6 +386,38 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  // Securely resets registration settings (Clears stale binding numbers like custom ...96 from old database runs)
+  const resetPhoneRegistration = async () => {
+    if (!user) {
+      toast.error("Please log in first to clear credentials.");
+      return;
+    }
+    try {
+      const userDocRef = doc(db, 'users', user.uid);
+      await updateDoc(userDocRef, {
+        phoneNumber: "",
+        phoneVerified: false,
+        deviceSignature: "",
+        authorizedDevices: [],
+        pendingChallenge: null,
+        isSetupComplete: false
+      });
+      setIsDeviceAuthorized(true);
+      setIsSessionVerified(false);
+      setShowShadowModeScreen(false);
+      setProfile((prev) => prev ? {
+        ...prev,
+        phoneNumber: "",
+        phoneVerified: false,
+        deviceSignature: "",
+        isSetupComplete: false
+      } : null);
+      toast.success("Registration reset! Please link your current mobile number fresh.");
+    } catch (err: any) {
+      toast.error(`Reset failed: ${err.message}`);
+    }
+  };
+
   // Reject/Cancel current challenge request
   const cancelChallengeRequest = async () => {
     if (!user) return;
@@ -404,7 +473,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       isAdmin,
       isMasterAdmin,
       submitMobileResponseKey,
-      currentChallengeKey: mobileChallengeKey
+      currentChallengeKey: mobileChallengeKey,
+      resetPhoneRegistration
     }}>
       {children}
 
@@ -486,6 +556,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                   Cancel Auth
                 </button>
               </div>
+
+              {/* Secure Reset Button: Allows resetting the phone binding state if stuck on old test data */}
+              <button
+                onClick={resetPhoneRegistration}
+                className="text-xs text-indigo-500 hover:text-indigo-600 font-extrabold underline transition duration-150 pt-2"
+              >
+                Reset Mobile Binding
+              </button>
 
               <div className="text-[10px] text-slate-400 font-extrabold uppercase tracking-widest pt-4">
                 {submitLoading ? "Verifying Token..." : "Waiting for SIM..."}
