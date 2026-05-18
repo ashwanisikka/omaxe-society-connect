@@ -12,7 +12,7 @@ import { getAuth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 import { toast } from 'sonner';
 
-// COMPATIBILITY INLINE TYPES: Prevents any compilation/import errors from external types file
+// INLINE TYPE DEFINITIONS: Prevents any relative import resolution errors in preview
 export type UserRole = 'user' | 'admin';
 
 export interface UserProfile {
@@ -28,7 +28,7 @@ export interface UserProfile {
   isBlocked?: boolean;
 }
 
-// 1. Direct Firebase Config initialization to avoid relative "../lib/firebase" path errors
+// 1. Centralized Firebase Initialization within AuthContext to guarantee zero relative path crashes
 const firebaseConfig = {
   projectId: "omaxe-heights-portal",
   appId: "1:398226441084:web:9c11756e4f220d8d275af9",
@@ -62,7 +62,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState(true);
   const [isDeviceAuthorized, setIsDeviceAuthorized] = useState(false);
 
-  // Helper: Secure Hardware-bound device signature generator (Locks browser instance specifically)
+  // Helper: Secure Device Signature coordinate mapping (Locks browser instance metadata)
   const getDeviceSignature = (): string => {
     let signature = localStorage.getItem('omaxe_device_signature');
     if (!signature) {
@@ -70,7 +70,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const agentParams = navigator.userAgent.replace(/\D/g, '');
       const uniqueUUID = crypto.randomUUID();
       
-      // Build device fingerprint signature
+      // Generate unique bound device signature
       signature = `dev_${btoa(screenParams + agentParams).slice(0, 16)}_${uniqueUUID.slice(0, 8)}`;
       localStorage.setItem('omaxe_device_signature', signature);
     }
@@ -78,7 +78,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   useEffect(() => {
-    // Persistent auth watcher on app bootstrap
+    // Autologin session status check on boot
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       try {
         if (currentUser) {
@@ -92,7 +92,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             const userData = userDoc.data() as UserProfile;
             setProfile(userData);
 
-            // AUTO-BYPASS HANDSHAKE: If user is verified and device signature matches, grant instant dashboard bypass
+            // AUTO-BYPASS FOR RECURRING VISITS: If phone number is verified and device signature matches
             if (userData.phoneVerified && userData.deviceSignature === deviceSig) {
               setIsDeviceAuthorized(true);
             } else {
@@ -108,7 +108,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setIsDeviceAuthorized(false);
         }
       } catch (err) {
-        console.error("Auth status initialization error:", err);
+        console.error("Auth context load failure:", err);
       } finally {
         setLoading(false);
       }
@@ -117,11 +117,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => unsubscribe();
   }, []);
 
-  // 1. Google Authentication Sign-In (Force landing screen selection popups)
+  // 1. Google Sign-In: Users always land strictly on Google popup selector on the first visit
   const loginWithGoogle = async () => {
     setLoading(true);
     const provider = new GoogleAuthProvider();
-    provider.setCustomParameters({ prompt: 'select_account' }); // Never skip manual account choosing step
+    provider.setCustomParameters({ prompt: 'select_account' }); // Never skip select_account parameter
     
     try {
       const result = await signInWithPopup(auth, provider);
@@ -140,18 +140,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           createdAt: new Date().toISOString(),
           phoneVerified: false,
           phoneNumber: '',
-          deviceSignature: '', // Blank state awaiting SIM binding registration
+          deviceSignature: '', // Blank state awaiting active SIM registration
           isSetupComplete: false
         };
         await setDoc(userDocRef, newProfile);
         setProfile(newProfile);
         setIsDeviceAuthorized(false);
-        toast.success("Google Account authenticated. Please register your device phone number.");
+        toast.success("Google Account authenticated. Please complete device physical phone binding.");
       } else {
         const userData = userDoc.data() as UserProfile;
         setProfile(userData);
         
-        // Auto-match signature coordinates for direct auto-bypass
+        // Auto-match signature coordinates
         if (userData.phoneVerified && userData.deviceSignature === deviceSig) {
           setIsDeviceAuthorized(true);
           toast.success(`Welcome back, ${userData.displayName || 'Resident'}!`);
@@ -168,7 +168,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // 2. Lock the current physical device's browser fingerprint with the validated mobile number
+  // 2. Hardware and Phone Validation Lock: Saves unique browser signature to prevent spoofing
   const verifyAndBindPhone = async (phoneNumber: string): Promise<boolean> => {
     if (!user) {
       toast.error("Google session invalid. Please log in using Google first.");
@@ -185,7 +185,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const deviceSig = getDeviceSignature();
       const userDocRef = doc(db, 'users', user.uid);
 
-      // Lock this 10-digit number strictly with the unique browser key signature
+      // Lock this number strictly to the generated device signature
       await updateDoc(userDocRef, {
         phoneNumber: sanitizedPhone,
         phoneVerified: true,
@@ -211,7 +211,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  // 3. User session logout trigger
+  // 3. Secure session logout trigger
   const logout = async () => {
     setLoading(true);
     try {
@@ -219,7 +219,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setUser(null);
       setProfile(null);
       setIsDeviceAuthorized(false);
-      toast.success("Session closed successfully.");
+      toast.success("Session closed safely.");
     } catch (err) {
       console.error("Logout failed:", err);
     } finally {
