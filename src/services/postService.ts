@@ -7,12 +7,14 @@ import {
   updateDoc, 
   deleteDoc,
   arrayUnion,
-  onSnapshot
+  onSnapshot,
+  query,
+  orderBy
 } from 'firebase/firestore';
-import { getAuth, signInAnonymously, signInWithCustomToken } from 'firebase/auth';
+import { getAuth, signInAnonymously } from 'firebase/auth';
 import { initializeApp, getApps, getApp } from 'firebase/app';
 
-// 1. Firebase configuration block
+// 1. Firebase configuration settings block
 const firebaseConfig = {
   projectId: "omaxe-heights-portal",
   appId: "1:398226441084:web:9c11756e4f220d8d275af9",
@@ -25,48 +27,44 @@ const firebaseConfig = {
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 const auth = getAuth(app);
 
-// Custom Database instance use ho raha hai
+// AAPKA APNA CUSTOM DATABASE INSTANCE
 const db = getFirestore(app, "ai-studio-e12d6e76-8aa2-4bd4-96b2-ed235287a5c2");
 
-// Dynamic App ID check
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'omaxe-society-connect';
-
-// RULE 3 - Global Promise to ensure authentication resolves FIRST before any query
-const authPromise = (async () => {
-  try {
-    if (auth.currentUser) return auth.currentUser;
-    
-    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-      const cred = await signInWithCustomToken(auth, __initial_auth_token);
-      return cred.user;
-    } else {
-      const cred = await signInAnonymously(auth);
-      return cred.user;
+// Safe and conflict-free Auth Initialization
+const getAuthenticatedUser = (): Promise<any> => {
+  return new Promise((resolve, reject) => {
+    // Agar Firebase auth pehle se ready hai aur user logged-in hai
+    if (auth.currentUser) {
+      resolve(auth.currentUser);
+      return;
     }
-  } catch (err) {
-    console.error("Firebase auth initialization failed:", err);
-    return null;
-  }
-})();
 
-// RULE 2 - In-Memory sorting wrapper (orderBy query contains security limitations)
-const sortPostsByDate = (postsArray: any[]) => {
-  return postsArray.sort((a, b) => {
-    const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-    const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-    return dateB - dateA; // Newest first
+    // Auth state change ka wait karega taaki session conflict (user-mismatch) na aaye
+    const unsubscribe = auth.onAuthStateChanged(async (user) => {
+      unsubscribe();
+      if (user) {
+        resolve(user);
+      } else {
+        try {
+          // Agar koi active session nahi hai, toh safe anonymous login trigger karega
+          const cred = await signInAnonymously(auth);
+          resolve(cred.user);
+        } catch (err) {
+          console.error("Anonymous authentication failed:", err);
+          reject(err);
+        }
+      }
+    });
   });
 };
 
 export const postService = {
-  // 1. Fetch all posts securely after auth completes successfully
+  // 1. Root 'posts' collection se chronological order mein posts fetch karta hai
   async getAllPosts() {
-    const user = await authPromise;
-    if (!user) throw new Error("Authentication failed. Cannot fetch noticeboard posts.");
-
-    // RULE 1: Standard public data path
-    const postsRef = collection(db, 'artifacts', appId, 'public', 'data', 'posts');
-    const querySnapshot = await getDocs(postsRef);
+    await getAuthenticatedUser();
+    const postsRef = collection(db, 'posts');
+    const q = query(postsRef, orderBy('createdAt', 'desc'));
+    const querySnapshot = await getDocs(q);
     
     const posts: any[] = [];
     querySnapshot.forEach((doc) => {
@@ -74,30 +72,24 @@ export const postService = {
       posts.push({ 
         id: doc.id, 
         ...data,
-        category: data.category || 'general',
+        category: data.category || 'general', // UI rendering crash safeguard
         status: data.status || 'pending',
         imageUrls: data.imageUrls || (data.imageUrl ? [data.imageUrl] : []),
         comments: data.comments || []
       });
     });
-
-    return sortPostsByDate(posts);
+    return posts;
   },
 
-  // 2. Real-time subscription sync with explicit Auth Block Guard (RULE 3 and RULE 2 compliant)
+  // 2. Real-time changes subscription on root 'posts' collection
   subscribeToPosts(callback: (posts: any[]) => void) {
-    let unsubscribe: (() => void) | null = null;
-    let active = true;
+    let unsubscribeSnapshot: (() => void) | null = null;
 
-    authPromise.then((user) => {
-      if (!active) return;
-      if (!user) {
-        console.error("Subscription blocked: Auth promise resolved to null.");
-        return;
-      }
-
-      const postsRef = collection(db, 'artifacts', appId, 'public', 'data', 'posts');
-      unsubscribe = onSnapshot(postsRef, (snapshot) => {
+    getAuthenticatedUser().then(() => {
+      const postsRef = collection(db, 'posts');
+      const q = query(postsRef, orderBy('createdAt', 'desc'));
+      
+      unsubscribeSnapshot = onSnapshot(q, (snapshot) => {
         const posts: any[] = [];
         snapshot.forEach((doc) => {
           const data = doc.data();
@@ -110,19 +102,20 @@ export const postService = {
             comments: data.comments || []
           });
         });
-        callback(sortPostsByDate(posts));
+        callback(posts);
       }, (error) => {
-        console.error("Firebase subscription error in posts:", error);
+        console.error("Firebase subscription error:", error);
       });
+    }).catch((err) => {
+      console.error("Auth initialization error in subscription:", err);
     });
 
     return () => {
-      active = false;
-      if (unsubscribe) unsubscribe();
+      if (unsubscribeSnapshot) unsubscribeSnapshot();
     };
   },
 
-  // Dynamic JSON parsing utility for Gemini API response configs
+  // Gemini utility clean parser
   cleanAndParseJSON(rawResponse: string) {
     try {
       let cleanString = rawResponse.trim();
@@ -137,16 +130,16 @@ export const postService = {
       }
       return JSON.parse(cleanString.trim());
     } catch (e) {
-      console.error("Failed to parse JSON:", e);
+      console.error("Failed to parse JSON response:", e);
       try {
         return JSON.parse(rawResponse);
       } catch (innerError) {
-        throw new Error("Invalid JSON formatting received.");
+        throw new Error("Invalid JSON configuration layout received.");
       }
     }
   },
 
-  // 3. Database post creator mapping standard allowed writes securely after auth
+  // 3. Root 'posts' collection mein naya post add karta hai
   async createPost(
     title: string, 
     content: string, 
@@ -154,49 +147,44 @@ export const postService = {
     authorName: string, 
     imageUrls: string[]
   ) {
-    const user = await authPromise;
-    if (!user) throw new Error("Database session failed. Authentication not valid.");
+    const user = await getAuthenticatedUser();
+    if (!user) throw new Error("Authentication session is required to post on board.");
 
     const newPost = {
       title: title,
       content: content,
       category: category || 'general',
-      status: 'pending', // Keeps initial post state to pending for moderation
+      status: 'pending', // Pending status is required for admin moderation validation rules
       imageUrl: imageUrls.length > 0 ? imageUrls[0] : null,
       imageUrls: imageUrls,
       authorId: user.uid,
-      authorName: authorName || "Resident",
+      authorName: authorName || user.displayName || "Resident",
       comments: [],
       createdAt: new Date().toISOString()
     };
 
-    const postsRef = collection(db, 'artifacts', appId, 'public', 'data', 'posts');
-    const docRef = await addDoc(postsRef, newPost);
+    const docRef = await addDoc(collection(db, 'posts'), newPost);
     return { id: docRef.id, ...newPost };
   },
 
-  // 4. Admin Action: Approve / Reject state update
+  // 4. Admin action: Post approve/reject handler
   async updatePostStatus(postId: string, status: 'approved' | 'rejected') {
-    const user = await authPromise;
-    if (!user) return;
-
-    const postRef = doc(db, 'artifacts', appId, 'public', 'data', 'posts', postId);
+    await getAuthenticatedUser();
+    const postRef = doc(db, 'posts', postId);
     await updateDoc(postRef, { status });
   },
 
-  // 5. Admin Action: Delete Post
+  // 5. Admin action: Post delete handler
   async deletePost(postId: string) {
-    const user = await authPromise;
-    if (!user) return;
-
-    const postRef = doc(db, 'artifacts', appId, 'public', 'data', 'posts', postId);
+    await getAuthenticatedUser();
+    const postRef = doc(db, 'posts', postId);
     await deleteDoc(postRef);
   },
 
-  // 6. Comments array updates
+  // 6. Comment poster inside comments array
   async addComment(postId: string, commentText: string) {
-    const user = await authPromise;
-    if (!user) throw new Error("You must be logged in to comment.");
+    const user = await getAuthenticatedUser();
+    if (!user) throw new Error("Authentication is required to post comments.");
 
     const newComment = {
       text: commentText,
@@ -205,7 +193,7 @@ export const postService = {
       createdAt: new Date().toISOString()
     };
 
-    const postRef = doc(db, 'artifacts', appId, 'public', 'data', 'posts', postId);
+    const postRef = doc(db, 'posts', postId);
     await updateDoc(postRef, {
       comments: arrayUnion(newComment)
     });
