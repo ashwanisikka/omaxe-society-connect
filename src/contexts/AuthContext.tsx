@@ -335,14 +335,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await handleUserLogin(result.user);
       })
       .catch((popupErr: any) => {
-        console.error("[AuthContext] Popup blocked! Attempting redirect login fallback...", popupErr.code);
+        console.error("[AuthContext] Popup triggered redirect fallback:", popupErr.code);
         setLoading(false);
         if (popupErr.code === 'auth/popup-blocked' || popupErr.code === 'auth/cancelled-popup-request') {
-          // Automatic seamless redirect fallback so login NEVER fails on popup blocker
-          signInWithRedirect(auth, provider).catch((redirectErr) => {
-            console.error("[AuthContext] Redirect failed too:", redirectErr);
-            toast.error("Google authentication completely blocked by browser settings.");
-          });
+          // Automatic redirect fallback on ad-blocker or strict popup filters
+          signInWithRedirect(auth, provider).catch(() => setLoading(false));
         } else {
           toast.error(`Google login failed: ${popupErr.message}`);
         }
