@@ -2,6 +2,8 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { 
   onAuthStateChanged, 
   signInWithPopup, 
+  signInWithRedirect,
+  getRedirectResult,
   GoogleAuthProvider, 
   signOut,
   User
@@ -15,15 +17,15 @@ interface AuthContextType {
   user: User | null;
   profile: UserProfile | null;
   loading: boolean;
-  loginWithGoogle: (e?: any) => Promise<void>;
-  signInWithGoogle: (e?: any) => Promise<void>; // Alias 1: UI click support
-  signIn: (e?: any) => Promise<void>;           // Alias 2: UI click support
-  login: (e?: any) => Promise<void>;            // Alias 3: UI click support
+  loginWithGoogle: (e?: any) => void;
+  signInWithGoogle: (e?: any) => void; // Alias 1: Button support
+  signIn: (e?: any) => void;           // Alias 2: Button support
+  login: (e?: any) => void;            // Alias 3: Button support
   logout: () => Promise<void>;
-  signOutUser: () => Promise<void>;      // Alias 4: Logout compatibility
+  signOutUser: () => Promise<void>;      // Alias 4: Logout support
   verifyAndBindPhone: (phoneNumber: string) => Promise<boolean>;
-  isDeviceAuthorized: boolean;            // Rollback stable bypass (always true)
-  isSessionVerified: boolean;             // App.tsx routing guard verification support
+  isDeviceAuthorized: boolean;            // Rollback: Always true to bypass loops
+  isSessionVerified: boolean;             // App.tsx routing guard verification check
   isAdmin: boolean;
   isMasterAdmin: boolean;
 }
@@ -34,18 +36,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
-  const [isDeviceAuthorized] = useState(true); // Hamesha true taaki device fingerprinting loops na banein
+  const [isDeviceAuthorized] = useState(true); // Always true to safely bypass loops
   const [isSessionVerified, setIsSessionVerified] = useState(false);
 
-  // Synchronizes authenticated resident session with direct Firestore database collection
+  // Profile data handler: Synchronizes authenticated user with direct Firestore collection
   const handleUserLogin = async (currentUser: User) => {
     try {
-      console.log("[AuthContext] Reading profile database for:", currentUser.uid);
+      console.log("[AuthContext] Synchronizing authenticated resident profile:", currentUser.uid);
       const userDocRef = doc(db, 'users', currentUser.uid);
       const userDoc = await getDoc(userDocRef);
 
       if (!userDoc.exists()) {
-        console.log("[AuthContext] Initializing new profile registration template...");
+        console.log("[AuthContext] Profile database entry missing. Creating new resident record...");
         const newProfile: UserProfile = {
           uid: currentUser.uid,
           email: currentUser.email || '',
@@ -59,13 +61,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await setDoc(userDocRef, newProfile);
         setProfile(newProfile);
         setIsSessionVerified(false);
-        toast.success("Google Account authenticated! Kripya apna 10-digit primary mobile number link kijiye.");
+        toast.success("Google Account authenticated successfully! Kripya apna 10-digit primary mobile number link kijiye.");
       } else {
         const userData = userDoc.data() as UserProfile;
         setProfile(userData);
-        console.log("[AuthContext] Resident profile verified successfully:", userData.displayName);
+        console.log("[AuthContext] Existing profile synchronized successfully:", userData.displayName);
         
-        // Match verification state to let user land on dashboard
+        // Let verified user land directly onto Dashboard without loops!
         if (userData.phoneVerified && userData.isSetupComplete) {
           setIsSessionVerified(true);
           toast.success(`Welcome back, ${userData.displayName || 'Resident'}!`);
@@ -75,13 +77,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       }
     } catch (err: any) {
-      console.error("[AuthContext] Firestore sync error:", err);
-      toast.error(`Database Handshake Failed: ${err.message || 'Check firestore config.'}`);
+      console.error("[AuthContext] Firestore sync failure:", err);
+      toast.error(`Database Connection Error: ${err.message || 'Check firestore configuration.'}`);
     }
   };
 
   useEffect(() => {
-    // Watch persistent auth status on boot up
+    // A. Handle Redirect Result if redirected back to Vercel page
+    getRedirectResult(auth)
+      .then(async (result) => {
+        if (result && result.user) {
+          console.log("[AuthContext] Redirect sign-in success!");
+          setUser(result.user);
+          await handleUserLogin(result.user);
+        }
+      })
+      .catch((err) => {
+        console.warn("[AuthContext] Redirect lookup bypassed:", err.message);
+      });
+
+    // B. Watch persistent session tokens
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       try {
         if (currentUser) {
@@ -93,7 +108,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setIsSessionVerified(false);
         }
       } catch (err) {
-        console.error("[AuthContext] Session synchronization failed:", err);
+        console.error("[AuthContext] Session synchronization error:", err);
       } finally {
         setLoading(false);
       }
@@ -102,8 +117,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => unsubscribe();
   }, []);
 
-  // Standard Google login trigger without any async delay to block popups!
-  const executeGoogleAuth = async (e?: any) => {
+  // Standard Google login trigger without any async delay to prevent popup blocking!
+  const executeGoogleAuth = (e?: any) => {
     if (e && typeof e.preventDefault === 'function') e.preventDefault();
 
     console.log("[AuthContext] executeGoogleAuth manual trigger active.");
@@ -112,31 +127,45 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({ prompt: 'select_account' });
     
-    try {
-      console.log("[AuthContext] Launching direct Google Popup...");
-      const result = await signInWithPopup(auth, provider);
-      console.log("[AuthContext] Popup authorization success!");
-      setUser(result.user);
-      await handleUserLogin(result.user);
-    } catch (popupErr: any) {
-      console.error("[AuthContext] Direct popup login crashed:", popupErr);
-      if (popupErr.code === 'auth/unauthorized-domain') {
-        toast.error("Vercel domain is unauthorized in Firebase Console Settings!");
-      } else {
-        toast.error(`Login trigger failed: ${popupErr.message || 'Please check browser popup settings.'}`);
-      }
-    } finally {
-      setLoading(false);
-    }
+    // Direct synchronous call: Browser identifies this as clean user click gesture!
+    console.log("[AuthContext] Launching direct Google Popup...");
+    signInWithPopup(auth, provider)
+      .then(async (result) => {
+        console.log("[AuthContext] Popup authorization success!");
+        setUser(result.user);
+        await handleUserLogin(result.user);
+      })
+      .catch((popupErr: any) => {
+        console.error("[AuthContext] Direct popup login failed:", popupErr.code);
+        
+        // Automatic fallback redirection if browser settings strictly disable popups
+        if (popupErr.code === 'auth/popup-blocked' || popupErr.code === 'auth/cancelled-popup-request') {
+          console.log("[AuthContext] Popup blocked by browser! Falling back to Redirect...");
+          toast.info("Opening Google authentication redirect page...");
+          
+          signInWithRedirect(auth, provider)
+            .catch((redirectErr: any) => {
+              console.error("[AuthContext] Redirect fallback failed too:", redirectErr);
+              toast.error("Google trigger completely blocked by browser settings.");
+              setLoading(false);
+            });
+        } else if (popupErr.code === 'auth/unauthorized-domain') {
+          toast.error("Vercel domain is unauthorized in Firebase Console settings!");
+          setLoading(false);
+        } else {
+          toast.error(`Login trigger failed: ${popupErr.message || 'Please check browser popup settings.'}`);
+          setLoading(false);
+        }
+      });
   };
 
-  // Aliases for layout buttons
+  // Bind execution triggers to multiple alias properties
   const loginWithGoogle = executeGoogleAuth;
   const signInWithGoogle = executeGoogleAuth;
   const signIn = executeGoogleAuth;
   const login = executeGoogleAuth;
 
-  // Locks validated primary mobile phone with advanced fake number validations!
+  // Locks validated primary mobile phone with strict checks against fake numbers!
   const verifyAndBindPhone = async (phoneNumber: string): Promise<boolean> => {
     if (!user) {
       toast.error("Google session invalid. Please log in using Google first.");
@@ -188,7 +217,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       } : null);
 
       setIsSessionVerified(true);
-      toast.success("Mobile linked successfully!");
+      toast.success("Mobile linked and registered successfully!");
       return true;
     } catch (err: any) {
       console.error("[AuthContext] Phone setup failed:", err);
@@ -205,7 +234,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setUser(null);
       setProfile(null);
       setIsSessionVerified(false);
-      toast.success("Session closed safely.");
+      toast.success("Logged out successfully.");
     } catch (err) {
       console.error("[AuthContext] Logout failed:", err);
     } finally {
