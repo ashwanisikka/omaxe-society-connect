@@ -10,28 +10,24 @@ import {
   browserLocalPersistence,
   User
 } from 'firebase/auth';
-import { doc, getDoc, setDoc, updateDoc, serverTimestamp, getFirestore } from 'firebase/firestore';
-import { auth, db, app } from '../lib/firebase';
+import { doc, getDoc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { auth, db } from '../lib/firebase';
 import { UserProfile, UserRole } from '../types';
 import { toast } from 'sonner';
-
-// Custom database index loading checks to prevent cross-origin instance storage blocks
-const customDbId = "ai-studio-e12d6e76-8aa2-4bd4-96b2-ed235287a5c2";
-const safeDb = db ? db : getFirestore(app, customDbId);
 
 interface AuthContextType {
   user: User | null;
   profile: UserProfile | null;
   loading: boolean;
   loginWithGoogle: (e?: any) => void;
-  signInWithGoogle: (e?: any) => void; // Alias 1: UI button click compatibility
-  signIn: (e?: any) => void;           // Alias 2: UI button click compatibility
-  login: (e?: any) => void;            // Alias 3: UI button click compatibility
+  signInWithGoogle: (e?: any) => void; // Alias 1: Click mapping
+  signIn: (e?: any) => void;           // Alias 2: Click mapping
+  login: (e?: any) => void;            // Alias 3: Click mapping
   logout: () => Promise<void>;
-  signOutUser: () => Promise<void>;      // Alias 4: UI logout action compatibility
+  signOutUser: () => Promise<void>;      // Alias 4: Logout compatibility
   verifyAndBindPhone: (phoneNumber: string) => Promise<boolean>;
   isDeviceAuthorized: boolean;
-  isSessionVerified: boolean;             // App.tsx routing synchronization
+  isSessionVerified: boolean;             // App.tsx router guard checks
   isAdmin: boolean;
   isMasterAdmin: boolean;
 }
@@ -45,7 +41,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isDeviceAuthorized, setIsDeviceAuthorized] = useState(false);
   const [isSessionVerified, setIsSessionVerified] = useState(false);
 
-  // Helper: Hardware Device Signature (To bind browser fingerprint metadata to resident record)
+  // Helper: Hardware device signature creator
   const getDeviceSignature = (): string => {
     let signature = localStorage.getItem('omaxe_device_signature');
     if (!signature) {
@@ -53,23 +49,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const agentParams = navigator.userAgent.replace(/\D/g, '');
       const uniqueUUID = crypto.randomUUID();
       
-      // Creating unique browser coordinate bound signature
       signature = `dev_${btoa(screenParams + agentParams).slice(0, 16)}_${uniqueUUID.slice(0, 8)}`;
       localStorage.setItem('omaxe_device_signature', signature);
     }
     return signature;
   };
 
-  // Profile verification: reads Firestore document and maps state properties
+  // Profile builder: reads or registers user data directly inside Firestore
   const handleUserLogin = async (currentUser: User) => {
     try {
-      console.log("[AuthContext] Reading profile database for:", currentUser.uid);
-      const userDocRef = doc(safeDb, 'users', currentUser.uid);
+      console.log("[AuthContext] Fetching Firestore document for user:", currentUser.uid);
+      const userDocRef = doc(db, 'users', currentUser.uid);
       const userDoc = await getDoc(userDocRef);
       const deviceSig = getDeviceSignature();
 
       if (!userDoc.exists()) {
-        console.log("[AuthContext] Initializing new profile registration template...");
+        console.log("[AuthContext] Registration initiated for new resident...");
         const newProfile: UserProfile = {
           uid: currentUser.uid,
           email: currentUser.email || '',
@@ -78,20 +73,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           createdAt: new Date().toISOString(),
           phoneVerified: false,
           phoneNumber: '',
-          deviceSignature: '', // Empty state awaiting 2-factor physical bind setup
+          deviceSignature: '', // Blank state until verified phone binding
           isSetupComplete: false
         };
         await setDoc(userDocRef, newProfile);
         setProfile(newProfile);
         setIsDeviceAuthorized(false);
         setIsSessionVerified(false);
-        toast.success("Google Account authenticated! Kripya apna 10-digit mobile number link kijiye.");
+        toast.success("Google Account authenticated! Kripya apna 10-digit mobile number bind kijiye.");
       } else {
         const userData = userDoc.data() as UserProfile;
         setProfile(userData);
-        console.log("[AuthContext] Resident profile found successfully:", userData.displayName);
+        console.log("[AuthContext] Profile loaded successfully:", userData.displayName);
         
-        // Match browser cookie coordinate fingerprints to fast-bypass lock
+        // Auto-match signature coordinates for dashboard bypass
         if (userData.phoneVerified && userData.deviceSignature === deviceSig) {
           setIsDeviceAuthorized(true);
           setIsSessionVerified(true);
@@ -99,63 +94,59 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         } else {
           setIsDeviceAuthorized(false);
           setIsSessionVerified(false);
-          toast.warning("Naya browser ya device detected. Safety setup complete kijiye.");
+          toast.warning("Naya physical device detected ya verification setup required.");
         }
       }
     } catch (err: any) {
-      console.error("[AuthContext] Custom Firestore Sync error:", err);
+      console.error("[AuthContext] Firestore sync error:", err);
       toast.error(`Database Handshake Failed: ${err.message || 'Check database configurations'}`);
     }
   };
 
   useEffect(() => {
-    // 1. Establish persistent local storage persistence config on startup
+    // 1. Force local storage persistence configurations on boot
     setPersistence(auth, browserLocalPersistence)
-      .then(() => {
-        console.log("[AuthContext] Session persistence initialized successfully.");
-      })
-      .catch((err) => {
-        console.error("[AuthContext] Failed to set session persistence:", err);
-      });
+      .then(() => console.log("[AuthContext] Session persistence initialized."))
+      .catch((err) => console.error("[AuthContext] Persistence registration failed:", err));
 
-    // 2. Safety release to guarantee button click never remains frozen on loading delays
+    // 2. Safety release to make sure button controls never freeze on database lag
     const loadTimeout = setTimeout(() => {
-      console.log("[AuthContext] Safety check triggered. Login button controls active.");
+      console.log("[AuthContext] Safety timer released. Controls unlocked.");
       setLoading(false);
     }, 1500);
 
-    // 3. Handle Redirect callbacks automatically when return from Google pages
+    // 3. Handle Redirect verification results upon callback reload
     getRedirectResult(auth)
       .then(async (result) => {
         if (result && result.user) {
-          console.log("[AuthContext] Redirect login verification successful!");
+          console.log("[AuthContext] Redirect login verified successfully!");
           setUser(result.user);
           await handleUserLogin(result.user);
         }
       })
       .catch((err: any) => {
-        console.warn("[AuthContext] Redirect callback bypassed:", err.message);
+        console.warn("[AuthContext] Redirect result evaluation bypassed:", err.message);
         if (err.code === 'auth/unauthorized-domain') {
-          toast.error("Vercel domain is unauthorized in Firebase Console Settings!");
+          toast.error("Firebase Security: Add 'omaxe-society-connect.vercel.app' to Authorized Domains in Firebase Settings.");
         }
       });
 
-    // 4. Watch persistent auth status on boot up
+    // 4. Watch persistent authentication changes
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       try {
         if (currentUser) {
-          console.log("[AuthContext] Session recovered for:", currentUser.email);
+          console.log("[AuthContext] Persistent session active for:", currentUser.email);
           setUser(currentUser);
           await handleUserLogin(currentUser);
         } else {
-          console.log("[AuthContext] No active session found.");
+          console.log("[AuthContext] No active persistent session found.");
           setUser(null);
           setProfile(null);
           setIsDeviceAuthorized(false);
           setIsSessionVerified(false);
         }
       } catch (err) {
-        console.error("[AuthContext] Observer session verification failed:", err);
+        console.error("[AuthContext] Session synchronization failed:", err);
       } finally {
         setLoading(false);
         clearTimeout(loadTimeout);
@@ -168,21 +159,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
   }, []);
 
-  // Central Google Sign-in trigger with ZERO delay & automatic fallback logic!
+  // Central Google Sign-in action triggers Popup with immediate Redirect fallback
   const executeGoogleAuth = (e?: any) => {
-    // Immediate browser default prevent to stop page reloads during click events
+    // Stop event propagation immediately to block form submit page reloads
     if (e) {
       if (typeof e.preventDefault === 'function') e.preventDefault();
       if (typeof e.stopPropagation === 'function') e.stopPropagation();
     }
 
-    console.log("[AuthContext] executeGoogleAuth manual trigger active.");
+    console.log("[AuthContext] executeGoogleAuth trigger started...");
     setLoading(true);
     
     const provider = new GoogleAuthProvider();
-    provider.setCustomParameters({ prompt: 'select_account' }); // Enforce manual chooser screen
-    
-    // Direct synchronous call ensures the popup blocker is completely bypassed on Desktop!
+    provider.setCustomParameters({ prompt: 'select_account' }); // Never skip manual account choosing step
+
+    // Executed instantly on the same thread tick to bypass Chrome's Popup Blocker
     console.log("[AuthContext] Launching direct Google Popup...");
     signInWithPopup(auth, provider)
       .then(async (result) => {
@@ -191,30 +182,29 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await handleUserLogin(result.user);
       })
       .catch((popupErr: any) => {
-        console.error("[AuthContext] Popup sign-in error details:", popupErr);
+        console.error("[AuthContext] Popup trigger failed:", popupErr.code);
         
-        // AUTOMATIC FAILOVER REDIRECT: If popup is blocked, seamlessly trigger redirect fallback!
-        if (popupErr.code === 'auth/popup-blocked') {
-          console.log("[AuthContext] Popup blocked! Triggering seamless redirect fallback...");
-          toast.info("Redirecting you to Google login screen...");
+        // Automatic failover fallback to Redirects for mobile devices/iframes
+        if (popupErr.code === 'auth/popup-blocked' || popupErr.code === 'auth/cancelled-popup-request') {
+          console.log("[AuthContext] Popup blocked! Fallback to signInWithRedirect...");
+          toast.info("Opening Google authentication redirect page...");
           
           signInWithRedirect(auth, provider)
             .catch((redirectErr: any) => {
               console.error("[AuthContext] Redirect fallback failed too:", redirectErr);
-              toast.error("Redirect fallback failed! Please allow popups or check browser permissions.");
+              toast.error("Authentication trigger failed! Please check browser popup permissions.");
               setLoading(false);
             });
         } else if (popupErr.code === 'auth/unauthorized-domain') {
-          toast.error("Vercel domain is unauthorized in Firebase Console!");
+          toast.error("Vercel Domain Unauthorized: Please authorize 'omaxe-society-connect.vercel.app' in Firebase Console.");
           setLoading(false);
         } else {
-          toast.error(`Login failed: ${popupErr.message || 'Please check network connections.'}`);
+          toast.error(`Login failed: ${popupErr.message || 'Check network connection.'}`);
           setLoading(false);
         }
       });
   };
 
-  // Bind execution triggers to multiple alias properties
   const loginWithGoogle = executeGoogleAuth;
   const signInWithGoogle = executeGoogleAuth;
   const signIn = executeGoogleAuth;
@@ -298,7 +288,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       signOutUser,       
       verifyAndBindPhone,
       isDeviceAuthorized,
-      isSessionVerified, // CRITICAL PORT EXPORT: Maps to needsVerification constraints
+      isSessionVerified, // Maps to needsVerification App.tsx constraints
       isAdmin,
       isMasterAdmin
     }}>
