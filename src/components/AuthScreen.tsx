@@ -25,43 +25,23 @@ export function AuthScreen() {
       <motion.div
         initial={{ opacity: 0, y: 30 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.8, ease: "easeOut" }}
-        className="relative z-10 w-full max-w-md"
+        className="z-10 w-full max-w-md"
       >
-        <Card className="border-none shadow-[0_32px_64px_-12px_rgba(0,0,0,0.6)] bg-white/95 backdrop-blur-2xl overflow-hidden rounded-[2.5rem]">
-          <div className="h-40 bg-indigo-600 flex flex-col items-center justify-center relative overflow-hidden group">
-            <div className="absolute inset-0 opacity-10">
-               <div className="absolute -inset-[100%] bg-[radial-gradient(circle,white_1px,transparent_1px)] bg-[size:20px_20px]" />
+        <Card className="bg-white/95 backdrop-blur-xl border-0 shadow-2xl rounded-[2.5rem] overflow-hidden">
+          <CardHeader className="space-y-2 p-8 text-center">
+            <div className="w-16 h-16 bg-indigo-600 rounded-3xl mx-auto flex items-center justify-center text-white shadow-lg mb-4">
+              <Home size={32} />
             </div>
-            <motion.div 
-              initial={{ scale: 0.8, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              transition={{ delay: 0.3 }}
-              className="w-14 h-14 bg-white rounded-2xl flex items-center justify-center text-indigo-600 shadow-2xl relative z-10"
-            >
-              <Home size={28} strokeWidth={2.5} />
-            </motion.div>
-          </div>
-          <CardHeader className="text-center pt-8 pb-4 px-4 sm:px-10">
-            <CardTitle className="text-3xl sm:text-4xl font-black text-gray-900 tracking-tighter leading-none">
-              OMAXE <span className="text-indigo-600 italic">HEIGHTS</span>
-            </CardTitle>
-            <div className="flex flex-col items-center justify-center mt-3">
-              <p className="text-[11px] font-bold text-gray-500 uppercase tracking-widest mt-1">
-                Sonipat, Haryana
-              </p>
-              <p className="text-[14px] font-bold text-gray-900 uppercase tracking-widest mt-8 leading-tight">
-                Society's Local Directory and Ad portal
-              </p>
-            </div>
+            <CardTitle className="text-3xl font-black text-gray-900 uppercase italic tracking-tighter">Omaxe Heights</CardTitle>
+            <CardDescription className="font-bold text-indigo-600 uppercase tracking-widest text-xs">Resident Secure Portal</CardDescription>
           </CardHeader>
 
-          <CardContent className="px-6 sm:px-10 pb-12 space-y-8">
+          <CardContent className="p-8 pt-0">
             <div className="space-y-6">
-              <div className="flex justify-center">
-                <div className="flex flex-col items-center gap-4 p-6 bg-indigo-50/50 rounded-3xl border border-indigo-100 text-center w-full">
+              <div className="bg-gray-50 p-6 rounded-2xl border border-gray-100">
+                <div className="flex items-center justify-between mb-4">
                   <div className="flex -space-x-3">
-                    {[1, 2, 3].map((i) => (
+                    {[0, 1, 2].map((i) => (
                       <div key={i} className="w-10 h-10 rounded-full border-2 border-white bg-indigo-100 flex items-center justify-center overflow-hidden">
                         <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=user${i}`} alt="user" className="w-full h-full" />
                       </div>
@@ -84,8 +64,12 @@ export function AuthScreen() {
               </Button>
             </div>
 
-            <div className="pt-4 border-t border-gray-100">
-              <p className="text-center text-[10px] text-gray-400 leading-relaxed font-bold uppercase tracking-widest">
+            {/* ASHWANI SIKKA BRANDING ADDED HERE */}
+            <div className="pt-8 mt-6 border-t border-gray-100 text-center">
+              <p className="text-[9px] font-black text-slate-400 uppercase tracking-[0.3em]">
+                DESIGNED & DEVELOPED BY ASHWANI SIKKA
+              </p>
+              <p className="text-[8px] text-gray-300 mt-1 uppercase tracking-widest">
                 Official Residential Portal
               </p>
             </div>
