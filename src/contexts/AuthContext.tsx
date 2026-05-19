@@ -1066,7 +1066,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                   onClick={() => handleMobileVerificationTap(codeOption)}
                   className="py-4 bg-indigo-50 hover:bg-indigo-100 active:scale-95 text-indigo-600 font-black text-2xl rounded-2xl transition duration-150 border border-indigo-100/50"
                 >
-                  {codeOption>
+                  {codeOption}
                 </button>
               ))}
             </div>
