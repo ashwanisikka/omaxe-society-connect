@@ -60,15 +60,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Setup Form inputs for the second page UI overlay
   const [showSetupWizard, setShowSetupWizard] = useState(false);
-  const [setupStep, setSetupStep] = useState(1); // 1: Info (Name & Gender), 2: Mobile Number, 3: Google-style 2FA matching verification
+  const [setupStep, setSetupStep] = useState(1); // 1: Info (Name & Gender), 2: Mobile Number, 3: Awaiting Link Click
   const [setupName, setSetupName] = useState('');
   const [setupPhone, setSetupPhone] = useState('');
   const [setupGender, setSetupGender] = useState('');
   const [setupSubmitLoading, setSetupSubmitLoading] = useState(false);
-
-  // 100% Free Self-SMS SIM Handshake Verification states
-  const [simMatchingTarget, setSimMatchingTarget] = useState('');
-  const [simChoices, setSimChoices] = useState<string[]>([]);
 
   // Laptop Google-style 2FA states
   const [showLaptopHandshake, setShowLaptopHandshake] = useState(false);
@@ -239,7 +235,40 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       })
       .catch((err) => console.warn("[AuthContext] Redirect check result:", err.message));
 
-    // 3. Main Auth observer
+    // 3. Process URL activation parameter to complete SIM handshake link verification
+    const handleUrlActivation = async () => {
+      const urlParams = new URLSearchParams(window.location.search);
+      const verifySimUid = urlParams.get('verify_sim');
+
+      if (verifySimUid) {
+        try {
+          // Clear query parameters from address bar to keep things completely clean
+          const cleanUrl = new URL(window.location.href);
+          cleanUrl.searchParams.delete('verify_sim');
+          window.history.replaceState({}, document.title, cleanUrl.toString());
+
+          console.log("[AuthContext] Processing SIM activation link for UID:", verifySimUid);
+          
+          // Conforms to RULE 1: /artifacts/{appId}/public/data/{collectionName}
+          const verificationRef = doc(db, 'artifacts', appId, 'public', 'data', 'verifications', verifySimUid);
+          await setDoc(verificationRef, { status: 'verified' }, { merge: true });
+          
+          toast.success("SIM card ownership verified successfully!");
+        } catch (e: any) {
+          console.error("[AuthContext] Failed to complete verification update:", e.message);
+        }
+      }
+    };
+
+    handleUrlActivation();
+  }, [appId]);
+
+  useEffect(() => {
+    let unsubChallenge: () => void = () => {};
+    let unsubVerification: () => void = () => {};
+    let unsubProfileDeleteWatcher: () => void = () => {};
+
+    // Main Auth observer
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       try {
         if (currentUser) {
@@ -250,8 +279,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           
           // Conforms to RULE 1: /artifacts/{appId}/public/data/{collectionName}
           const challengeRef = doc(db, 'artifacts', appId, 'public', 'data', 'challenges', currentUser.uid);
+          const verificationRef = doc(db, 'artifacts', appId, 'public', 'data', 'verifications', currentUser.uid);
+          const userDocRef = doc(db, 'artifacts', appId, 'users', currentUser.uid, 'profile', 'user_data');
           
-          const unsubChallenge = onSnapshot(challengeRef, async (snapshot) => {
+          // REAL-TIME FORCE-LOGOUT watcher: Checks if Admin deletes the profile document in Firestore
+          unsubProfileDeleteWatcher = onSnapshot(userDocRef, async (profileSnap) => {
+            if (!profileSnap.exists()) {
+              // Document deleted! Wipe session and force logout
+              const hasLocalProfile = localStorage.getItem(`omaxe_user_profile_${currentUser.uid}`);
+              if (hasLocalProfile) {
+                console.log("[AuthContext] User profile document missing in Firestore. Logging out...");
+                localStorage.removeItem(`omaxe_user_profile_${currentUser.uid}`);
+                await signOut(auth);
+                setUser(null);
+                setProfile(null);
+                setIsSessionVerified(false);
+                setShowSetupWizard(false);
+                toast.error("Your resident profile has been deleted by the Admin. Please register again.");
+              }
+            } else {
+              setProfile(profileSnap.data() as UserProfile);
+            }
+          }, (err) => {
+            console.warn("[AuthContext] Real-time profile sync restricted:", err.message);
+          });
+
+          // Listen for Laptop Handshake updates
+          unsubChallenge = onSnapshot(challengeRef, async (snapshot) => {
             if (snapshot.exists()) {
               const data = snapshot.data();
               
@@ -261,9 +315,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                   console.log("[AuthContext] Handshake approved! Laptop session unlocked.");
                   
                   // Add laptop browser signature to approved lists
-                  const userDocRef = doc(db, 'artifacts', appId, 'users', currentUser.uid, 'profile', 'user_data');
                   const userDoc = await getDoc(userDocRef);
-                  
                   if (userDoc.exists()) {
                     const profileData = userDoc.data();
                     const existingAuthorized = profileData.authorizedDevices || [];
@@ -300,7 +352,43 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             console.warn("[AuthContext] Challenges fallback tracking activated.", err.message);
           });
 
-          return () => unsubChallenge();
+          // Listen for SIM Loopback SMS verification updates
+          unsubVerification = onSnapshot(verificationRef, async (snapshot) => {
+            if (snapshot.exists()) {
+              const data = snapshot.data();
+              if (data.status === 'verified') {
+                console.log("[AuthContext] SMS handshake link clicked! Finalizing profile setup...");
+                
+                const updatedProfile: UserProfile = {
+                  uid: currentUser.uid,
+                  email: currentUser.email || '',
+                  displayName: setupName.trim() || currentUser.displayName || 'Resident',
+                  gender: setupGender || 'Not Specified',
+                  role: profile?.role || 'user' as UserRole,
+                  createdAt: profile?.createdAt || new Date().toISOString(),
+                  phoneVerified: true,
+                  phoneNumber: data.phone || setupPhone,
+                  deviceSignature: clientSig,
+                  isSetupComplete: true,
+                  authorizedDevices: [clientSig]
+                };
+
+                localStorage.setItem(`omaxe_user_profile_${currentUser.uid}`, JSON.stringify(updatedProfile));
+                await setDoc(userDocRef, updatedProfile, { merge: true });
+
+                setProfile(updatedProfile);
+                setIsSessionVerified(true);
+                setShowSetupWizard(false);
+                toast.success("Physical SIM validated successfully! Identity Activated.");
+              }
+            }
+          });
+
+          return () => {
+            unsubProfileDeleteWatcher();
+            unsubChallenge();
+            unsubVerification();
+          };
         } else {
           setUser(null);
           setProfile(null);
@@ -318,7 +406,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [setupName, setupGender, setupPhone, appId]);
 
   // Secure Direct Google Authentication
   const executeGoogleAuth = (e?: any) => {
@@ -350,31 +438,39 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const login = executeGoogleAuth;
 
   // 100% FREE SMS Self-Handshake Dispatch (Opens native SMS client to test SIM card loopback presence)
-  const initiateSimLoopbackHandshake = () => {
+  const initiateSimLoopbackHandshake = async () => {
+    if (!user) return;
     const finalPhone = setupPhone.trim().replace(/\D/g, '');
     if (finalPhone.length !== 10 || !/^[6-9]/.test(finalPhone)) {
       toast.error("Error: Kripya ek valid 10-digit mobile number enter kijiye!");
       return;
     }
 
-    // Generate random code & choice decimals
-    const targetDigit = (Math.floor(Math.random() * 90) + 10).toString();
-    const d1 = (Math.floor(Math.random() * 90) + 10).toString();
-    const d2 = (Math.floor(Math.random() * 90) + 10).toString();
-    const shuffledChoices = [targetDigit, d1, d2].sort(() => Math.random() - 0.5);
+    setSetupSubmitLoading(true);
 
-    setSimMatchingTarget(targetDigit);
-    setSimChoices(shuffledChoices);
+    try {
+      // 1. Write the pending verification token state to public challenges conforming strictly to RULE 1
+      const verificationRef = doc(db, 'artifacts', appId, 'public', 'data', 'verifications', user.uid);
+      await setDoc(verificationRef, {
+        phone: finalPhone,
+        status: 'pending',
+        createdAt: new Date().toISOString()
+      });
 
-    // Creates safe carrier local system loopback text message
-    const smsUri = `sms:+91${finalPhone}?body=Omaxe Connect SIM Hardware activation matching code is [${targetDigit}]. Tap matching digits in app overlay to verify.`;
-    
-    // Dispatches user intention to native SMS controller
-    window.location.href = smsUri;
+      // 2. Open SMS App: Pre-filled with loopback linking target that proves physical SIM possession
+      const activationUrl = `${window.location.origin}/?verify_sim=${user.uid}`;
+      const smsUri = `sms:+91${finalPhone}?body=Click link on this phone to activate Omaxe Heights resident identity: ${activationUrl}`;
+      
+      // Dispatch intent
+      window.location.href = smsUri;
 
-    // Show step 3 verification overlay matching prompt on the phone screen
-    setSetupStep(3);
-    toast.success("SIM signal handshake initiated! Sending free SMS loopback to your own number.");
+      setSetupStep(3); // Shift to waiting loading screen
+      toast.success("SIM signal verification initiated! Please send the free loopback message.");
+    } catch (e: any) {
+      toast.error(`Verification setup failed: ${e.message}`);
+    } finally {
+      setSetupSubmitLoading(false);
+    }
   };
 
   // Laptop Bypass verification trigger for standard zero-SIM setups
@@ -412,52 +508,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setIsSessionVerified(true);
       setShowSetupWizard(false);
       toast.success("Laptop verification bypass complete! Welcome to Dashboard.");
-    } catch (err: any) {
-      console.warn("[AuthContext] Firestore write bypassed via active local state.", err);
-      setProfile(updatedProfile);
-      setIsSessionVerified(true);
-      setShowSetupWizard(false);
-      toast.success("Welcome to Dashboard!");
-    } finally {
-      setSetupSubmitLoading(false);
-    }
-  };
-
-  // Verifies selected code match to completely finalize the user profile setup
-  const confirmSimHandshakeMatch = async (selectedCode: string) => {
-    if (selectedCode !== simMatchingTarget) {
-      toast.error("Galat matching code select kiya gaya hai! SIM validation failed.");
-      return;
-    }
-
-    setSetupSubmitLoading(true);
-    const clientSig = getDeviceSignature();
-
-    const updatedProfile: UserProfile = {
-      uid: user!.uid,
-      email: user!.email || '',
-      displayName: setupName.trim(),
-      gender: setupGender,
-      role: profile?.role || 'user' as UserRole,
-      createdAt: profile?.createdAt || new Date().toISOString(),
-      phoneVerified: true,
-      phoneNumber: setupPhone.trim().replace(/\D/g, ''),
-      deviceSignature: clientSig, // Set current registration device as primary
-      isSetupComplete: true,
-      authorizedDevices: [clientSig]
-    };
-
-    localStorage.setItem(`omaxe_user_profile_${user!.uid}`, JSON.stringify(updatedProfile));
-
-    try {
-      // Conforms strictly to RULE 1: /artifacts/{appId}/users/{userId}/{collectionName}
-      const userDocRef = doc(db, 'artifacts', appId, 'users', user!.uid, 'profile', 'user_data');
-      await setDoc(userDocRef, updatedProfile, { merge: true });
-
-      setProfile(updatedProfile);
-      setIsSessionVerified(true);
-      setShowSetupWizard(false);
-      toast.success("SIM Binding complete! Welcome to Dashboard.");
     } catch (err: any) {
       console.warn("[AuthContext] Firestore write bypassed via active local state.", err);
       setProfile(updatedProfile);
@@ -673,9 +723,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     <button
                       type="button"
                       onClick={initiateSimLoopbackHandshake}
+                      disabled={setupSubmitLoading}
                       className="py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black rounded-2xl shadow-lg shadow-indigo-600/20 transition duration-150 text-center text-xs uppercase"
                     >
-                      Initiate SIM Handshake 🛡️
+                      {setupSubmitLoading ? 'Saving Setup...' : 'Initiate SIM Handshake 🛡️'}
                     </button>
                   </div>
 
@@ -695,30 +746,40 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             {setupStep === 3 && (
               <div className="space-y-6 text-center">
                 <div className="w-16 h-16 bg-indigo-50 rounded-3xl flex items-center justify-center text-indigo-600 mx-auto mb-2 animate-bounce">
-                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-8 h-8">
+                  <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 8.25h9m-9 3h9m-9 3h3m-6.75 4.5h16.5a2.25 2.25 0 0 0 2.25-2.25V5.25A2.25 2.25 0 0 0 18.75 3H5.25A2.25 2.25 0 0 0 3 5.25v13.5A2.25 2.25 0 0 0 5.25 21Z" />
                   </svg>
                 </div>
 
                 <h3 className="text-xl font-black text-slate-900 uppercase tracking-tight">Carrier SMS Dispatched</h3>
-                <p className="text-slate-500 text-xs px-2 leading-relaxed">
-                  Humne aapke number par ek local carrier SMS query send kiya hai. Kripya apna system message inbox ya top notification bar check kijiye aur SMS ke andar dikhaya matching number select kijiye:
-                </p>
-
-                <div className="grid grid-cols-3 gap-3 w-full my-4">
-                  {simChoices.map((codeOption) => (
-                    <button
-                      key={codeOption}
-                      type="button"
-                      onClick={() => confirmSimHandshakeMatch(codeOption)}
-                      className="py-4 bg-indigo-50 hover:bg-indigo-100 active:scale-95 text-indigo-600 font-black text-2xl rounded-2xl transition duration-150 border border-indigo-100/50"
-                    >
-                      {codeOption}
-                    </button>
-                  ))}
+                
+                <div className="bg-slate-50 border border-slate-200 rounded-3xl p-6 text-left space-y-4">
+                  <div className="flex gap-3">
+                    <span className="text-lg">📱</span>
+                    <div>
+                      <p className="text-xs font-black text-slate-400 uppercase tracking-wider">SMS Dispatch Target</p>
+                      <p className="text-base font-black text-slate-800 tracking-wider mt-0.5">+91 {setupPhone}</p>
+                    </div>
+                  </div>
+                  
+                  <div className="h-px bg-slate-200"></div>
+                  
+                  <div className="text-xs text-slate-500 font-bold leading-relaxed space-y-2">
+                    <p>1. Apne phone ka pre-filled local SMS message send kijiye (jo unke native SMS app mein open hua hai).</p>
+                    <p>2. SMS send karne par aapka phone khud hi use receive karega.</p>
+                    <p className="text-indigo-600 font-extrabold">3. Apne message inbox mein aaye activation link par click kijiye.</p>
+                  </div>
                 </div>
 
-                <div className="flex flex-col gap-2 pt-2">
+                <div className="flex flex-col gap-3 pt-2">
+                  <div className="flex items-center justify-center gap-2 text-indigo-600 font-extrabold text-xs">
+                    <svg className="animate-spin h-4 w-4 text-indigo-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <span>Awaiting SIM confirmation click...</span>
+                  </div>
+
                   <button
                     type="button"
                     onClick={initiateSimLoopbackHandshake}
