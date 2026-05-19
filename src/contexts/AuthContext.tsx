@@ -7,8 +7,8 @@ import {
   User
 } from 'firebase/auth';
 import { doc, onSnapshot, updateDoc } from 'firebase/firestore';
-// Error fixed: Ensure your firebase init file path matches your project structure
-import { auth, db } from '../firebaseConfig'; 
+// Import path aapke project structure ke hisaab se update kiya gaya hai
+import { auth, db } from '../lib/firebase';
 import { UserProfile } from '../types';
 
 interface AuthContextType {
@@ -66,8 +66,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [user]);
 
   const loginWithGoogle = async () => {
-    const provider = new GoogleAuthProvider();
-    await signInWithPopup(auth, provider);
+    try {
+      const provider = new GoogleAuthProvider();
+      await signInWithPopup(auth, provider);
+    } catch (err) {
+      console.error("Login mein dikkat aayi:", err);
+    }
   };
 
   const logout = async () => {
@@ -76,9 +80,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const submitMobileResponseKey = async (key: string) => {
     if (!user) return false;
-    const challengeRef = doc(db, 'artifacts', appId, 'public', 'data', 'challenges', user.uid);
-    await updateDoc(challengeRef, { response: key, status: 'verified' });
-    return true;
+    try {
+      const challengeRef = doc(db, 'artifacts', appId, 'public', 'data', 'challenges', user.uid);
+      await updateDoc(challengeRef, { response: key, status: 'verified' });
+      return true;
+    } catch (err) {
+      console.error("Verification mein error:", err);
+      return false;
+    }
   };
 
   return (
@@ -95,8 +104,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       {mobileChallengeData && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[1000] p-4">
           <div className="bg-white p-6 rounded-3xl w-full max-w-sm shadow-2xl">
-            <h2 className="text-xl font-bold mb-2">Verify Device</h2>
-            <p className="text-gray-500 mb-6 text-sm">Select the matching key:</p>
+            <h2 className="text-xl font-bold mb-2">Device Verify Karein</h2>
+            <p className="text-gray-500 mb-6 text-sm">Matching key select karein:</p>
             
             <div className="grid grid-cols-3 gap-3 w-full mb-6">
               {mobileChallengeData.choices.map((codeOption: string) => (
