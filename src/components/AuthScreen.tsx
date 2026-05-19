@@ -2,17 +2,14 @@ import React, { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { Button } from './ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
-import { Home, LogIn, Users, CheckCircle2, Phone, ArrowLeft, ShieldCheck, Building2 } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
-import { Input } from './ui/input';
-import { toast } from 'sonner';
+import { Home, LogIn } from 'lucide-react';
+import { motion } from 'motion/react';
 
 export function AuthScreen() {
   const { login, loading: authLoading } = useAuth();
 
   return (
     <div className="min-h-screen relative flex items-center justify-center p-4 overflow-hidden bg-gray-900">
-      {/* Premium Background Image for Omaxe Heights */}
       <div className="absolute inset-0 z-0">
         <img 
           src="https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?auto=format&fit=crop&q=80&w=2000" 
@@ -33,6 +30,7 @@ export function AuthScreen() {
               <Home size={32} />
             </div>
             <CardTitle className="text-3xl font-black text-gray-900 uppercase italic tracking-tighter">Omaxe Heights</CardTitle>
+            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em] mt-1">Sonipat, Haryana</p>
             <CardDescription className="font-bold text-indigo-600 uppercase tracking-widest text-xs">Society's Digital Yellow Pages.</CardDescription>
           </CardHeader>
 
@@ -46,9 +44,7 @@ export function AuthScreen() {
                         <img src={`https://api.dicebear.com/7.x/avataaars/svg?seed=user${i}`} alt="user" className="w-full h-full" />
                       </div>
                     ))}
-                    <div className="w-10 h-10 rounded-full border-2 border-white bg-indigo-600 flex items-center justify-center text-white text-[10px] font-bold">
-                      +50
-                    </div>
+                    <div className="w-10 h-10 rounded-full border-2 border-white bg-indigo-600 flex items-center justify-center text-white text-[10px] font-bold">+50</div>
                   </div>
                   <p className="text-xs text-indigo-900 font-bold uppercase tracking-widest">STAY CONNECTED</p>
                 </div>
@@ -64,7 +60,6 @@ export function AuthScreen() {
               </Button>
             </div>
 
-            {/* ASHWANI SIKKA BRANDING ADDED HERE */}
             <div className="pt-8 mt-6 border-t border-gray-100 text-center">
               <p className="text-[9px] font-black text-slate-400 uppercase tracking-[0.3em]">
                 DESIGNED & DEVELOPED BY ASHWANI SIKKA
