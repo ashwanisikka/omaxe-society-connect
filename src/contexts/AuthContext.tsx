@@ -598,60 +598,455 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   return (
     <AuthContext.Provider value={{ 
-      user, profile, loading, loginWithGoogle, signInWithGoogle, signIn, login, logout, signOutUser, 
-      verifyAndBindPhone, isDeviceAuthorized, isSessionVerified, isAdmin, isMasterAdmin, 
-      submitMobileResponseKey, currentChallengeKey, resetPhoneRegistration
+      user, 
+      profile, 
+      loading, 
+      loginWithGoogle, 
+      signInWithGoogle, 
+      signIn,            
+      login,             
+      logout,
+      signOutUser,       
+      verifyAndBindPhone,
+      isDeviceAuthorized,
+      isSessionVerified,
+      isAdmin,
+      isMasterAdmin,
+      submitMobileResponseKey,
+      currentChallengeKey,
+      resetPhoneRegistration
     }}>
       {children}
+
       {showInstallBanner && (
         <div className="fixed top-4 left-4 right-4 z-[2000000] flex items-center justify-between bg-slate-900 text-white p-4 rounded-[1.8rem] shadow-2xl border-2 border-indigo-500/30 animate-in slide-in-from-top-10 duration-300">
-           <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3">
             <span className="text-2xl">📲</span>
             <div className="text-left">
               <p className="text-xs font-black uppercase tracking-wider text-indigo-400">Install Omaxe Heights App</p>
-              <p className="text-[10px] text-slate-300 font-semibold leading-tight">Install this web app to your home screen.</p>
+              <p className="text-[10px] text-slate-300 font-semibold leading-tight">Install this web app to your home screen for rapid free 2FA & direct access.</p>
             </div>
-           </div>
-           <button onClick={handleInstallApp} className="bg-indigo-600 px-4 py-2 rounded-xl text-xs font-black">Install</button>
-           <button onClick={() => setShowInstallBanner(false)} className="text-slate-400 ml-2">✕</button>
-        </div>
-      )}
-      {showSetupWizard && user && (
-        <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-slate-950/95 backdrop-blur-md overflow-y-auto">
-          <div className="w-full max-w-lg bg-white rounded-[2.5rem] shadow-2xl p-8">
-            {setupStep === 1 && (
-              <div className="space-y-4">
-                <input type="text" value={setupName} onChange={(e) => setSetupName(e.target.value)} placeholder="Full Name" className="w-full p-3 border rounded-xl" />
-                <button onClick={() => setSetupStep(2)} className="w-full bg-indigo-600 text-white py-3 rounded-xl">Next</button>
-              </div>
-            )}
-            {setupStep === 2 && (
-              <div className="space-y-4">
-                <input type="tel" maxLength={10} value={setupPhone} onChange={(e) => setSetupPhone(e.target.value)} placeholder="10-digit Mobile" className="w-full p-3 border rounded-xl" />
-                <button onClick={initiateSimLoopbackHandshake} disabled={setupSubmitLoading} className="w-full bg-indigo-600 text-white py-3 rounded-xl">Verify SIM 🛡️</button>
-              </div>
-            )}
-            {setupStep === 3 && <p className="text-center font-bold">Awaiting SIM confirmation click...</p>}
+          </div>
+          <div className="flex items-center gap-2 shrink-0 ml-4">
+            <button
+              onClick={handleInstallApp}
+              className="bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white text-[10px] font-black uppercase tracking-wider px-4 py-2 rounded-xl transition-all"
+            >
+              Install App
+            </button>
+            <button
+              onClick={() => setShowInstallBanner(false)}
+              className="text-slate-400 hover:text-white p-1 text-xs font-bold"
+            >
+              ✕
+            </button>
           </div>
         </div>
       )}
-      {showLaptopHandshake && user && (
-         <div className="fixed inset-0 z-[999999] flex items-center justify-center p-4 bg-slate-950/98 backdrop-blur-md">
-            <div className="bg-white p-8 rounded-3xl text-center">
-              <h3 className="text-xl font-black">Is that you?</h3>
-              <div className="text-5xl font-black my-6">{laptopHandshakeCode}</div>
+
+      {isMasterAdmin && (
+        <div className="fixed bottom-6 right-6 z-[999999] flex flex-col items-end">
+          {!showDevToolkit ? (
+            <button
+              onClick={() => setShowDevToolkit(true)}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs px-5 py-3.5 rounded-full shadow-2xl border-2 border-white flex items-center gap-2 transition duration-200"
+            >
+              ⚙️ DEVELOPER TEST TOOLKIT
+            </button>
+          ) : (
+            <div className="w-80 bg-slate-900 border-2 border-indigo-500 text-white rounded-[2rem] p-5 shadow-2xl flex flex-col animate-in slide-in-from-bottom-5 duration-200">
+              <div className="flex justify-between items-center mb-4">
+                <span className="text-xs font-black text-indigo-400 tracking-wider uppercase">
+                  🛡️ Developer Test Toolkit
+                </span>
+                <button
+                  onClick={() => setShowDevToolkit(false)}
+                  className="text-slate-400 hover:text-white text-sm font-bold"
+                >
+                  ✕ Close
+                </button>
+              </div>
+
+              <p className="text-[11px] text-slate-400 font-semibold mb-4 leading-relaxed">
+                Use this panel on mobile or laptop to force-reset any Google account state or device identification on-the-spot!
+              </p>
+
+              <div className="space-y-2.5">
+                <button
+                  onClick={devResetProfileInDatabase}
+                  className="w-full text-left py-2.5 px-4 bg-indigo-950/50 hover:bg-indigo-950 text-indigo-300 hover:text-indigo-200 text-xs font-black rounded-2xl border border-indigo-800/40 transition duration-150 flex items-center justify-between"
+                >
+                  <span>🔥 Reset Active User & Setup</span>
+                  <span className="text-[10px] bg-indigo-900 text-indigo-300 py-0.5 px-2 rounded-full font-bold">Wizard</span>
+                </button>
+
+                <button
+                  onClick={devWipeDeviceSignature}
+                  className="w-full text-left py-2.5 px-4 bg-indigo-950/50 hover:bg-indigo-950 text-indigo-300 hover:text-indigo-200 text-xs font-black rounded-2xl border border-indigo-800/40 transition duration-150 flex items-center justify-between"
+                >
+                  <span>💻 Wipe My Device Signature</span>
+                  <span className="text-[10px] bg-indigo-900 text-indigo-300 py-0.5 px-2 rounded-full font-bold">2FA Laptop</span>
+                </button>
+
+                <button
+                  onClick={devSimulateAdminDeletion}
+                  className="w-full text-left py-2.5 px-4 bg-rose-950/50 hover:bg-rose-950 text-rose-300 hover:text-rose-200 text-xs font-black rounded-2xl border border-rose-800/40 transition duration-150 flex items-center justify-between"
+                >
+                  <span>🚨 Simulate Admin Profile Delete</span>
+                  <span className="text-[10px] bg-rose-900 text-rose-300 py-0.5 px-2 rounded-full font-bold">Logout</span>
+                </button>
+              </div>
+
+              <div className="h-px bg-slate-800 my-4"></div>
+
+              <div className="text-[10px] text-slate-500 font-bold flex flex-col gap-0.5 leading-normal">
+                <p>• Active User Email: <span className="text-slate-300 font-extrabold">{user?.email || 'Logged Out'}</span></p>
+                <p>• Device Signature ID: <span className="text-slate-300 font-mono text-[9px]">{getDeviceSignature()}</span></p>
+                <p>• Setup Complete: <span className="text-slate-300 font-extrabold">{profile?.isSetupComplete ? 'YES' : 'NO'}</span></p>
+              </div>
             </div>
-         </div>
+          )}
+        </div>
       )}
+
+      {showSetupWizard && user && (
+        <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-slate-950/95 backdrop-blur-md overflow-y-auto">
+          <div className="w-full max-w-lg bg-white rounded-[2.5rem] shadow-2xl p-8 border border-slate-100 flex flex-col my-8 animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex flex-col items-center text-center mb-6">
+              <span className="text-xs font-black text-indigo-600 tracking-test uppercase mb-2">
+                Identity Activation
+              </span>
+              <h2 className="text-2xl font-black text-slate-900 tracking-tight uppercase">
+                Resident Registration
+              </h2>
+              <div className="h-1 w-16 bg-indigo-600 rounded-full mt-3"></div>
+            </div>
+
+            {isDesktop ? (
+              <div className="space-y-6 text-center">
+                <div className="w-20 h-20 bg-indigo-50 rounded-[2.2rem] flex items-center justify-center text-indigo-600 mx-auto mb-2 shadow-inner">
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-10 h-10 animate-pulse">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 1.5H8.25A2.25 2.25 0 0 0 6 3.75v16.5a2.25 2.25 0 0 0 2.25 2.25h7.5A2.25 2.25 0 0 0 18 20.25V3.75a2.25 2.25 0 0 0-2.25-2.25H13.5m-3 0V3h3V1.5m-3 0h3m-6 15h9m-9 3h9m-9-15h9" />
+                  </svg>
+                </div>
+
+                <h3 className="text-xl font-black text-slate-900 uppercase tracking-tight">Mobile SIM Proof Required</h3>
+                <p className="text-slate-500 text-sm leading-relaxed px-2">
+                  Resident registration laptop/desktop par allow nahi hai. Is identity validation process ke liye aapka mobile SIM card physical device mein active hona anivarya hai.
+                </p>
+
+                <div className="bg-slate-50 border-2 border-indigo-50/50 rounded-[2rem] p-6 text-left space-y-4">
+                  <p className="text-xs font-black text-indigo-600 uppercase tracking-wider flex items-center gap-2">
+                    🛡️ How to activate:
+                  </p>
+                  <ul className="text-xs text-slate-500 font-semibold space-y-2.5 leading-relaxed">
+                    <li className="flex gap-2">
+                      <span className="text-indigo-600 font-bold">1.</span>
+                      <span>Apne mobile phone browser mein <strong>omaxe-society-connect.vercel.app</strong> open kijiye.</span>
+                    </li>
+                    <li className="flex gap-2">
+                      <span className="text-indigo-600 font-bold">2.</span>
+                      <span>Same Google account (<span className="text-slate-700 font-black">{user.email}</span>) se login kijiye.</span>
+                    </li>
+                    <li className="flex gap-2">
+                      <span className="text-indigo-600 font-bold">3.</span>
+                      <span>Apna Mobile Number dalkar <strong>SMS Handshake Verify</strong> kijiye.</span>
+                    </li>
+                  </ul>
+                </div>
+
+                <div className="pt-4 space-y-4">
+                  <div className="flex items-center justify-center gap-2 text-indigo-600 font-extrabold text-xs">
+                    <svg className="animate-spin h-4 w-4 text-indigo-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <span>Awaiting mobile SIM activation...</span>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={logout}
+                    className="w-full py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-2xl transition duration-150 text-xs uppercase tracking-widest"
+                  >
+                    Cancel & Sign Out
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-5">
+                {setupStep === 1 && (
+                  <div className="space-y-5">
+                    <div>
+                      <label className="block text-xs font-black text-slate-500 tracking-wider uppercase mb-2">
+                        Full Name
+                      </label>
+                      <input
+                        type="text"
+                        value={setupName}
+                        onChange={(e) => setSetupName(e.target.value)}
+                        placeholder="Enter your full name"
+                        className="w-full px-5 py-3.5 bg-slate-50 border border-slate-200 rounded-2xl focus:border-indigo-500 focus:bg-white focus:outline-none transition-all duration-200 text-slate-800 font-bold"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-black text-slate-500 tracking-wider uppercase mb-2">
+                        Select Gender
+                      </label>
+                      <div className="grid grid-cols-2 gap-3">
+                        <button
+                          type="button"
+                          onClick={() => setSetupGender('Male')}
+                          className={`py-3 px-4 rounded-2xl border-2 font-black transition-all duration-150 text-sm ${
+                            setupGender === 'Male'
+                              ? 'border-indigo-600 bg-indigo-50 text-indigo-600'
+                              : 'border-slate-100 bg-slate-50/50 text-slate-500 hover:bg-slate-50'
+                          }`}
+                        >
+                          Male
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSetupGender('Female')}
+                          className={`py-3 px-4 rounded-2xl border-2 font-black transition-all duration-150 text-sm ${
+                            setupGender === 'Female'
+                          ? 'border-indigo-600 bg-indigo-50 text-indigo-600'
+                          : 'border-slate-100 bg-slate-50/50 text-slate-500 hover:bg-slate-50'
+                          }`}
+                        >
+                          Female
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="pt-4">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!setupName.trim()) {
+                            toast.error("Kripya apna Full Name enter kijiye!");
+                            return;
+                          }
+                          if (!setupGender) {
+                            toast.error("Kripya Gender select kijiye!");
+                            return;
+                          }
+                          setSetupStep(2);
+                        }}
+                        className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98] text-white font-black rounded-2xl shadow-lg shadow-indigo-600/20 transition-all duration-150 text-center uppercase tracking-wider text-xs"
+                      >
+                        Proceed to SIM Validation
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {setupStep === 2 && (
+                  <div className="space-y-5">
+                    <div>
+                      <label className="block text-xs font-black text-slate-500 tracking-wider uppercase mb-2">
+                        10-Digit Mobile Number
+                      </label>
+                      <div className="relative">
+                        <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 font-black text-sm">
+                          +91
+                        </span>
+                        <input
+                          type="tel"
+                          maxLength={10}
+                          value={setupPhone}
+                          onChange={(e) => setSetupPhone(e.target.value.replace(/\D/g, ''))}
+                          placeholder="Enter mobile number"
+                          className="w-full pl-14 pr-5 py-3.5 bg-slate-50 border border-slate-200 rounded-2xl focus:border-indigo-500 focus:bg-white focus:outline-none transition-all duration-200 text-slate-800 font-black tracking-widest text-lg"
+                        />
+                      </div>
+                      <p className="text-[10px] text-slate-400 font-bold mt-2.5 uppercase tracking-wide leading-relaxed">
+                        ⚠️ SIM Proof Required: Yeh number aapke isi mobile phone ke physical SIM card slot mein active hona chahiye.
+                      </p>
+                    </div>
+
+                    <div className="pt-4 grid grid-cols-2 gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setSetupStep(1)}
+                        className="py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-600 font-black rounded-2xl transition duration-150 text-center text-xs uppercase"
+                      >
+                        Back
+                      </button>
+                      <button
+                        type="button"
+                        onClick={initiateSimLoopbackHandshake}
+                        disabled={setupSubmitLoading}
+                        className="py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black rounded-2xl shadow-lg shadow-indigo-600/20 transition duration-150 text-center text-xs uppercase"
+                      >
+                        Verify SIM card 🛡️
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {setupStep === 3 && (
+                  <div className="space-y-6 text-center">
+                    <div className="w-16 h-16 bg-indigo-50 rounded-3xl flex items-center justify-center text-indigo-600 mx-auto mb-2 animate-bounce">
+                      <svg className="w-8 h-8" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 8.25h9m-9 3h9m-9 3h3m-6.75 4.5h16.5a2.25 2.25 0 0 0 2.25-2.25V5.25A2.25 2.25 0 0 0 18.75 3H5.25A2.25 2.25 0 0 0 3 5.25v13.5A2.25 2.25 0 0 0 5.25 21Z" />
+                      </svg>
+                    </div>
+
+                    <h3 className="text-xl font-black text-slate-900 uppercase tracking-tight">Carrier SMS Loopback Dispatched</h3>
+                    
+                    <div className="bg-slate-50 border border-slate-200 rounded-3xl p-6 text-left space-y-4">
+                      <div className="flex gap-3">
+                        <span className="text-lg">📱</span>
+                        <div>
+                          <p className="text-xs font-black text-slate-400 uppercase tracking-wider">SMS Dispatch Target</p>
+                          <p className="text-base font-black text-slate-800 tracking-wider mt-0.5">+91 {setupPhone}</p>
+                        </div>
+                      </div>
+                      
+                      <div className="h-px bg-slate-200"></div>
+                      
+                      <div className="text-xs text-slate-500 font-bold leading-relaxed space-y-2">
+                        <p>1. Apne mobile messaging app par pre-filled verification SMS ko send kijiye.</p>
+                        <p>2. SMS send hote hi wo automatically is mobile par receive ho jayega.</p>
+                        <p className="text-indigo-600 font-extrabold">3. Inbox mein aaye activation link par click kijiye, aapka and laptop ka login session instantly unlock ho jayenge!</p>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col gap-3 pt-2">
+                      <div className="flex items-center justify-center gap-2 text-indigo-600 font-extrabold text-xs">
+                        <svg className="animate-spin h-4 w-4 text-indigo-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        <span>Awaiting SIM confirmation click...</span>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={initiateSimLoopbackHandshake}
+                        className="text-xs text-indigo-500 hover:text-indigo-600 font-extrabold underline transition duration-150"
+                      >
+                        Resend SMS Handshake Query
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSetupStep(2)}
+                        className="text-xs text-slate-400 hover:text-slate-600 font-bold transition duration-150"
+                      >
+                        Change Mobile Number
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="pt-4 border-t border-slate-100 mt-6 text-center">
+                  <button
+                    type="button"
+                    onClick={logout}
+                    className="py-2.5 text-slate-400 hover:text-rose-500 font-black rounded-xl transition duration-150 text-[10px] uppercase tracking-widest"
+                  >
+                    Sign Out from Google Account
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {showLaptopHandshake && user && (
+        <div className="fixed inset-0 z-[999999] flex items-center justify-center p-4 bg-slate-950/98 backdrop-blur-md overflow-hidden">
+          <div className="w-full max-w-lg bg-white rounded-[2.5rem] shadow-2xl p-8 border border-slate-100 flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex flex-col items-center mb-6">
+              <span className="text-xs font-black text-indigo-600 tracking-widest uppercase mb-2">
+                Security Handshake
+              </span>
+              <h2 className="text-2xl font-black text-slate-900 tracking-tight uppercase">
+                Cross-Device Authorization
+              </h2>
+              <div className="h-1 w-16 bg-indigo-600 rounded-full mt-3"></div>
+            </div>
+
+            <div className="w-16 h-16 bg-rose-50 rounded-2xl flex items-center justify-center text-rose-600 mb-4 animate-pulse">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-8 h-8">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 1.5H8.25A2.25 2.25 0 0 0 6 3.75v16.5a2.25 2.25 0 0 0 2.25 2.25h7.5A2.25 2.25 0 0 0 18 20.25V3.75a2.25 2.25 0 0 0-2.25-2.25H13.5m-3 0V3h3V1.5m-3 0h3m-6 15h9m-9 3h9m-9-15h9" />
+              </svg>
+            </div>
+
+            <h3 className="text-xl font-extrabold text-slate-900 tracking-tight">
+              Is that you trying to sign in?
+            </h3>
+            <p className="text-slate-500 text-sm mt-1 px-4 leading-relaxed">
+              Humne aapke physical registered mobile phone ending in <span className="font-extrabold text-indigo-600">...{lastTwoDigitsOfPhone}</span> par verification overlay prompt bhaiza hai. Handshake match karne ke liye mobile app par ye matching code select kijiye:
+            </p>
+
+            <div className="w-full max-w-xs bg-slate-950 text-slate-200 rounded-[2.5rem] p-6 my-6 border border-slate-800 flex flex-col items-center">
+              <p className="text-[10px] font-black tracking-widest text-indigo-400 uppercase mb-2">
+                Select this matching number
+              </p>
+              <div className="text-5xl font-black text-white tracking-widest animate-pulse">
+                {laptopHandshakeCode}
+              </div>
+            </div>
+
+            <div className="w-full max-w-xs space-y-4">
+              <div className="flex items-center justify-center gap-2 pt-1 text-indigo-600 font-extrabold text-xs">
+                <svg className="animate-spin h-4 w-4 text-indigo-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <span>Awaiting mobile 2FA confirmation...</span>
+              </div>
+
+              <button
+                type="button"
+                onClick={logout}
+                className="w-full py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold rounded-2xl transition duration-150 text-sm uppercase tracking-wider"
+              >
+                Cancel Sign In
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {mobileChallengeData && user && (
         <div className="fixed inset-0 z-[999999] flex items-center justify-center p-4 bg-slate-950/95 backdrop-blur-lg">
-          <div className="bg-white p-6 rounded-3xl w-full max-w-sm">
-            <h3 className="text-lg font-black mb-4">Laptop Sign-In Prompt</h3>
-            <div className="grid grid-cols-3 gap-3">
+          <div className="w-full max-w-sm bg-white rounded-[2.5rem] shadow-2xl p-6 border border-slate-100 flex flex-col items-center text-center animate-in slide-in-from-bottom duration-300">
+            <div className="w-14 h-14 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center mb-4">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-7 h-7">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 17.25v1.007a3 3 0 0 1-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0 1 15 18.257V17.25m6-12V15a2.25 2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3 15V5.25m18 0A2.25 2.25 0 0 0 18.75 3H5.25A2.25 2.25 0 0 0 3 5.25m18 0V12a2.25 2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3 12V5.25" />
+              </svg>
+            </div>
+            
+            <h3 className="text-xl font-black text-slate-900 tracking-tight">Laptop Sign-In Prompt</h3>
+            <p className="text-slate-500 text-xs px-2 mt-1 mb-6">
+              Is that you trying to sign in from a Laptop? Tap the matching number shown on your laptop screen to authorize access:
+            </p>
+            
+            <div className="grid grid-cols-3 gap-3 w-full mb-6">
               {mobileChallengeData.choices.map((codeOption) => (
-                <button key={codeOption} onClick={() => handleMobileVerificationTap(codeOption)} className="p-4 bg-indigo-50 rounded-2xl text-xl font-black">{codeOption}</button>
+                <button
+                  key={codeOption}
+                  onClick={() => handleMobileVerificationTap(codeOption)}
+                  className="py-4 bg-indigo-50 hover:bg-indigo-100 active:scale-95 text-indigo-600 font-black text-2xl rounded-2xl transition duration-150 border border-indigo-100/50"
+                >
+                  {codeOption}
+                </button>
               ))}
             </div>
+
+            <button
+              onClick={async () => {
+                const challengeRef = doc(db, 'artifacts', appId, 'public', 'data', 'challenges', user.uid);
+                await updateDoc(challengeRef, { status: 'rejected' });
+              }}
+              className="w-full py-3 px-4 bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold rounded-2xl transition duration-150 text-xs uppercase tracking-wider"
+            >
+              No, It's Not Me (Block Access)
+            </button>
           </div>
         </div>
       )}
@@ -661,6 +1056,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
 export const useAuth = () => {
   const context = useContext(AuthContext);
-  if (context === undefined) throw new Error('useAuth must be used within an AuthProvider');
+  if (context === undefined) {
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
   return context;
 };
