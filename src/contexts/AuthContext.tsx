@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
-import { onAuthStateChanged, signInWithPopup, signInWithRedirect, getRedirectResult, GoogleAuthProvider, signOut, setPersistence, browserLocalPersistence, User } from 'firebase/auth';
+import { onAuthStateChanged, signInWithPopup, signInWithRedirect, getRedirectResult, GoogleAuthProvider, signOut, setPersistence, browserLocalPersistence, User, RecaptchaVerifier, linkWithPhoneNumber } from 'firebase/auth';
 import { doc, getDoc, setDoc, updateDoc, onSnapshot } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
 import { UserProfile, UserRole } from '../types';
@@ -32,6 +32,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [setupGender, setSetupGender] = useState('');
   const [setupSubmitLoading, setSetupSubmitLoading] = useState(false);
   const [showDevToolkit, setShowDevToolkit] = useState(false);
+  
+  // NEW: OTP States
+  const [otp, setOtp] = useState('');
+  const [confirmationResult, setConfirmationResult] = useState<any>(null);
+
   const setupNameRef = useRef(setupName);
   const setupGenderRef = useRef(setupGender);
   const setupPhoneRef = useRef(setupPhone);
@@ -131,25 +136,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     setPersistence(auth, browserLocalPersistence).catch((err) => console.warn(err));
     getRedirectResult(auth).then(async (result) => { if (result && result.user) { setUser(result.user); await handleUserLogin(result.user); } }).catch((err) => console.warn(err));
-
-    const handleUrlActivation = async () => {
-      const urlParams = new URLSearchParams(window.location.search);
-      const verifySimUid = urlParams.get('verify_sim');
-      if (verifySimUid) {
-        try {
-          const cleanUrl = new URL(window.location.href); cleanUrl.searchParams.delete('verify_sim'); window.history.replaceState({}, document.title, cleanUrl.toString());
-          const verificationRef = doc(db, 'artifacts', appId, 'public', 'data', 'verifications', verifySimUid);
-          await setDoc(verificationRef, { status: 'verified' }, { merge: true });
-          toast.success("Identity profile verified successfully via SIM Handshake Link.");
-        } catch (e: any) { console.error(e.message); }
-      }
-    };
-    handleUrlActivation();
   }, [appId]);
 
   useEffect(() => {
     let unsubChallenge: () => void = () => {};
-    let unsubVerification: () => void = () => {};
     let unsubProfileDeleteWatcher: () => void = () => {};
 
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
@@ -158,7 +148,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setUser(currentUser); await handleUserLogin(currentUser);
           const clientSig = getDeviceSignature();
           const challengeRef = doc(db, 'artifacts', appId, 'public', 'data', 'challenges', currentUser.uid);
-          const verificationRef = doc(db, 'artifacts', appId, 'public', 'data', 'verifications', currentUser.uid);
           const userDocRef = doc(db, 'artifacts', appId, 'users', currentUser.uid, 'profile', 'user_data');
           
           unsubProfileDeleteWatcher = onSnapshot(userDocRef, async (profileSnap) => {
@@ -187,17 +176,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             } else { setMobileChallengeData(null); }
           });
 
-          unsubVerification = onSnapshot(verificationRef, async (snapshot) => {
-            if (snapshot.exists() && snapshot.data().status === 'verified') {
-              const data = snapshot.data();
-              const updatedProfile: UserProfile = { uid: currentUser.uid, email: currentUser.email || '', displayName: setupNameRef.current.trim() || currentUser.displayName || 'Resident', gender: setupGenderRef.current || 'Not Specified', role: profile?.role || 'user' as UserRole, createdAt: profile?.createdAt || new Date().toISOString(), phoneVerified: true, phoneNumber: data.phone || setupPhoneRef.current, deviceSignature: clientSig, isSetupComplete: true, authorizedDevices: [clientSig] };
-              localStorage.setItem(`omaxe_user_profile_${currentUser.uid}`, JSON.stringify(updatedProfile));
-              await setDoc(userDocRef, updatedProfile, { merge: true });
-              setProfile(updatedProfile); setIsSessionVerified(true); setShowSetupWizard(false); toast.success("SIM Ownership validation confirmed!");
-            }
-          });
-
-          return () => { unsubProfileDeleteWatcher(); unsubChallenge(); unsubVerification(); };
+          return () => { unsubProfileDeleteWatcher(); unsubChallenge(); };
         } else {
           setUser(null); setProfile(null); setIsSessionVerified(false); setIsDeviceAuthorized(true); setShowSetupWizard(false); setShowLaptopHandshake(false); setMobileChallengeData(null);
         }
@@ -219,21 +198,66 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const loginWithGoogle = executeGoogleAuth; const signInWithGoogle = executeGoogleAuth; const signIn = executeGoogleAuth; const login = executeGoogleAuth;
 
-  const initiateSimLoopbackHandshake = async () => {
+  // NEW: Firebase OTP Request Logic
+  const requestOTP = async () => {
     if (!user) return;
     const finalPhone = setupPhone.trim().replace(/\D/g, '');
     if (finalPhone.length !== 10 || !/^[6-9]/.test(finalPhone)) { toast.error("Error: Kripya ek valid 10-digit mobile number enter kijiye!"); return; }
+    
     setSetupSubmitLoading(true);
     try {
-      const verificationRef = doc(db, 'artifacts', appId, 'public', 'data', 'verifications', user.uid);
-      await setDoc(verificationRef, { phone: finalPhone, status: 'pending', createdAt: new Date().toISOString() });
-      const activationUrl = `${window.location.origin}/?verify_sim=${user.uid}`;
-      const message = `Activate Omaxe Heights account: ${activationUrl}`;
-      const smsUri = `sms:+91${finalPhone}?body=${encodeURIComponent(message)}`;
-      window.location.href = smsUri;
-      setSetupStep(3); toast.success("SMS App khul gaya hai, bas Send button dabaiye!");
-    } catch (e: any) { toast.error(`SIM configuration error: ${e.message}`); } 
-    finally { setSetupStep(3); setSetupSubmitLoading(false); }
+      if (!(window as any).recaptchaVerifier) {
+        (window as any).recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
+          'size': 'invisible',
+          'callback': () => { console.log("Recaptcha verified"); }
+        });
+      }
+      const appVerifier = (window as any).recaptchaVerifier;
+      const phoneForAuth = `+91${finalPhone}`;
+      
+      const confResult = await linkWithPhoneNumber(user, phoneForAuth, appVerifier);
+      setConfirmationResult(confResult);
+      setSetupStep(3); 
+      toast.success(`OTP sent successfully to +91 ${finalPhone}`);
+    } catch (e: any) { 
+      console.error(e);
+      if (e.code === 'auth/credential-already-in-use') {
+        toast.error("Yeh number pehle hi kisi account se jura hai!");
+      } else {
+        toast.error(`OTP Error: ${e.message}`); 
+      }
+      if ((window as any).recaptchaVerifier) {
+        (window as any).recaptchaVerifier.clear();
+        (window as any).recaptchaVerifier = null;
+      }
+    } 
+    finally { setSetupSubmitLoading(false); }
+  };
+
+  // NEW: Firebase OTP Verification Logic
+  const verifyOTP = async () => {
+    if (!confirmationResult) return;
+    if (otp.length !== 6) { toast.error("Please enter a valid 6-digit OTP."); return; }
+    setSetupSubmitLoading(true);
+    try {
+      await confirmationResult.confirm(otp);
+      
+      const clientSig = getDeviceSignature();
+      const userDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'user_data');
+      const updatedProfile: UserProfile = { uid: user.uid, email: user.email || '', displayName: setupNameRef.current.trim() || user.displayName || 'Resident', gender: setupGenderRef.current || 'Not Specified', role: profile?.role || 'user' as UserRole, createdAt: profile?.createdAt || new Date().toISOString(), phoneVerified: true, phoneNumber: setupPhoneRef.current, deviceSignature: clientSig, isSetupComplete: true, authorizedDevices: [clientSig] };
+      
+      localStorage.setItem(`omaxe_user_profile_${user.uid}`, JSON.stringify(updatedProfile));
+      await setDoc(userDocRef, updatedProfile, { merge: true });
+      
+      setProfile(updatedProfile); 
+      setIsSessionVerified(true); 
+      setShowSetupWizard(false); 
+      toast.success("Mobile Verified! Welcome to Dashboard.");
+    } catch (e: any) {
+      toast.error(`Invalid OTP. Kripya sahi code enter karein.`);
+    } finally {
+      setSetupSubmitLoading(false);
+    }
   };
 
   const verifyAndBindPhone = async (): Promise<{ safe: boolean }> => { return { safe: true } as any; };
@@ -321,6 +345,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-slate-950/95 backdrop-blur-md overflow-y-auto">
           <div className="w-full max-w-lg bg-white rounded-[2.5rem] shadow-2xl p-8 border border-slate-100 flex flex-col my-8">
             <div className="flex flex-col items-center text-center mb-6"><span className="text-xs font-black text-indigo-600 tracking-test uppercase mb-2">Identity Activation</span><h2 className="text-2xl font-black text-slate-900 tracking-tight uppercase">Resident Registration</h2><div className="h-1 w-16 bg-indigo-600 rounded-full mt-3"></div></div>
+            
+            <div id="recaptcha-container"></div> {/* Firebase Invisible Recaptcha */}
+
             {isDesktop ? (
               <div className="space-y-6 text-center">
                 <h3 className="text-xl font-black text-slate-900 uppercase tracking-tight">Mobile SIM Proof Required</h3>
@@ -350,17 +377,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     </div>
                     <div className="pt-4 grid grid-cols-2 gap-3">
                       <button type="button" onClick={() => setSetupStep(1)} className="py-3.5 bg-slate-100 hover:bg-slate-200 text-slate-600 font-black rounded-2xl text-xs uppercase">Back</button>
-                      <button type="button" onClick={initiateSimLoopbackHandshake} disabled={setupSubmitLoading} className="py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black rounded-2xl text-xs uppercase">Verify SIM 🛡️</button>
+                      <button type="button" onClick={requestOTP} disabled={setupSubmitLoading} className="py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white font-black rounded-2xl text-xs uppercase">Send OTP 🛡️</button>
                     </div>
                   </div>
                 )}
                 {setupStep === 3 && (
                   <div className="space-y-6 text-center">
-                    <h3 className="text-xl font-black text-slate-900 uppercase">SMS Dispatched</h3>
-                    <p className="text-slate-500 font-bold text-xs">Please send the generated SMS and click the link in your inbox.</p>
-                    <div className="flex flex-col gap-3 pt-2">
-                      <button type="button" onClick={initiateSimLoopbackHandshake} className="text-xs text-indigo-500 font-extrabold underline">Resend SMS</button>
-                      <button type="button" onClick={() => setSetupStep(2)} className="text-xs text-slate-400 font-bold">Change Number</button>
+                    <h3 className="text-xl font-black text-slate-900 uppercase tracking-tight">Enter OTP</h3>
+                    <p className="text-slate-500 font-bold text-xs px-2">Kripya +91 {setupPhone} par bheja gaya 6-digit code enter karein:</p>
+                    
+                    <input 
+                      type="text" 
+                      maxLength={6} 
+                      value={otp} 
+                      onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))} 
+                      placeholder="XXXXXX" 
+                      className="w-full px-5 py-4 bg-slate-50 border border-slate-200 rounded-2xl text-center text-3xl font-black tracking-[0.5em] focus:border-indigo-500 focus:outline-none" 
+                    />
+                    
+                    <button type="button" onClick={verifyOTP} disabled={setupSubmitLoading || otp.length !== 6} className="w-full py-4 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-black rounded-2xl text-xs uppercase tracking-wider">
+                      Verify & Login
+                    </button>
+                    
+                    <div className="pt-2">
+                      <button type="button" onClick={() => { setSetupStep(2); setOtp(''); }} className="text-xs text-slate-400 font-bold hover:text-slate-600">Change Mobile Number</button>
                     </div>
                   </div>
                 )}
