@@ -10,7 +10,7 @@ import {
   browserLocalPersistence,
   User
 } from 'firebase/auth';
-import { doc, getDoc, setDoc, updateDoc, onSnapshot } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
 import { UserProfile, UserRole } from '../types';
 import { toast } from 'sonner';
@@ -63,6 +63,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [setupPhone, setSetupPhone] = useState('');
   const [setupGender, setSetupGender] = useState('');
   const [setupSubmitLoading, setSetupSubmitLoading] = useState(false);
+
+  // Dev toolkit toggle state
+  const [showDevToolkit, setShowDevToolkit] = useState(false);
 
   // Decoupled refs to prevent keystroke resets on input triggers
   const setupNameRef = useRef(setupName);
@@ -140,7 +143,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           } else {
             // Desktop login authorization challenge
             if (isDesktopClient) {
-              console.log("[AuthContext] Unauthorized Desktop login challenge triggered.");
+              console.log("[AuthContext] Desktop login challenge triggered.");
               setIsSessionVerified(true); // Keeps user inside app routing tree
               setShowSetupWizard(false);
               
@@ -404,7 +407,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (popupErr.code === 'auth/popup-blocked' || popupErr.code === 'auth/cancelled-popup-request') {
           signInWithRedirect(auth, provider).catch(() => setLoading(false));
         } else {
-          toast.error("Google authenticated dropped. Try again.");
+          toast.error("Google authentication dropped. Try again.");
           setLoading(false);
         }
       });
@@ -500,6 +503,65 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
   const signOutUser = logout;
 
+  // ==========================================
+  // DEV TOOLKIT ACTIONS FOR RAPID MULTI-ACCOUNT TESTING
+  // ==========================================
+  
+  const devResetProfileInDatabase = async () => {
+    if (!user) {
+      toast.error("Please login with a Google account first to reset it!");
+      return;
+    }
+    setLoading(true);
+    try {
+      // 1. Delete Firestore user document completely to clear out the database state
+      const userDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'user_data');
+      await deleteDoc(userDocRef);
+
+      // 2. Clear out any active challenges
+      const challengeRef = doc(db, 'artifacts', appId, 'public', 'data', 'challenges', user.uid);
+      await deleteDoc(challengeRef);
+
+      // 3. Clear local device cache
+      localStorage.removeItem(`omaxe_user_profile_${user.uid}`);
+      
+      // 4. Force state update
+      setProfile(null);
+      setIsSessionVerified(false);
+      setShowSetupWizard(true);
+      setSetupStep(1);
+      setSetupName('');
+      setSetupPhone('');
+      setSetupGender('');
+      
+      toast.success("DB Profile completely cleared! Full setup process triggered from scratch.");
+    } catch (err: any) {
+      toast.error(`Database wipe failed: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const devWipeDeviceSignature = () => {
+    localStorage.removeItem('omaxe_device_signature');
+    toast.success("Device browser signature wiped! This machine is now treated as an unrecognized desktop device.");
+    window.location.reload();
+  };
+
+  const devSimulateAdminDeletion = async () => {
+    if (!user) {
+      toast.error("No active user to simulate admin deletion!");
+      return;
+    }
+    try {
+      const userDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'user_data');
+      await deleteDoc(userDocRef);
+      toast.success("Simulation triggered: Profile deleted from Admin Portal! Watcher should force-logout now.");
+    } catch (err: any) {
+      toast.error(`Simulation failed: ${err.message}`);
+    }
+  };
+
   const submitMobileResponseKey = async () => true;
   const currentChallengeKey = null;
 
@@ -530,6 +592,75 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       resetPhoneRegistration
     }}>
       {children}
+
+      {/* FLOATING DEVELOPER SANDBOX TOOLKIT PANEL - STRICTLY RENDERED FOR ASHWANI SIKKA ONLY */}
+      {isMasterAdmin && (
+        <div className="fixed bottom-4 right-4 z-[1000000] flex flex-col items-end">
+          {!showDevToolkit ? (
+            <button
+              onClick={() => setShowDevToolkit(true)}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white font-black text-xs px-4 py-3 rounded-full shadow-2xl border-2 border-white flex items-center gap-2 transition duration-200 animate-pulse"
+            >
+              ⚙️ DEVELOPER TEST TOOLKIT
+            </button>
+          ) : (
+            <div className="w-80 bg-slate-900 border-2 border-indigo-500 text-white rounded-[2rem] p-5 shadow-2xl flex flex-col animate-in slide-in-from-bottom-5 duration-200">
+              <div className="flex justify-between items-center mb-4">
+                <span className="text-xs font-black text-indigo-400 tracking-wider uppercase">
+                  🛡️ Developer Test Toolkit
+                </span>
+                <button
+                  onClick={() => setShowDevToolkit(false)}
+                  className="text-slate-400 hover:text-white text-sm font-bold"
+                >
+                  ✕ Close
+                </button>
+              </div>
+
+              <p className="text-[11px] text-slate-400 font-semibold mb-4 leading-relaxed">
+                Use this panel on mobile or laptop to force-reset any Google account state or device identification on-the-spot!
+              </p>
+
+              <div className="space-y-2.5">
+                {/* Reset active user in Firestore */}
+                <button
+                  onClick={devResetProfileInDatabase}
+                  className="w-full text-left py-2.5 px-4 bg-indigo-950/50 hover:bg-indigo-950 text-indigo-300 hover:text-indigo-200 text-xs font-black rounded-2xl border border-indigo-800/40 transition duration-150 flex items-center justify-between"
+                >
+                  <span>🔥 Reset Active User & Setup</span>
+                  <span className="text-[10px] bg-indigo-900 text-indigo-300 py-0.5 px-2 rounded-full font-bold">Wizard</span>
+                </button>
+
+                {/* Wipe device signature */}
+                <button
+                  onClick={devWipeDeviceSignature}
+                  className="w-full text-left py-2.5 px-4 bg-indigo-950/50 hover:bg-indigo-950 text-indigo-300 hover:text-indigo-200 text-xs font-black rounded-2xl border border-indigo-800/40 transition duration-150 flex items-center justify-between"
+                >
+                  <span>💻 Wipe My Device Signature</span>
+                  <span className="text-[10px] bg-indigo-900 text-indigo-300 py-0.5 px-2 rounded-full font-bold">2FA Laptop</span>
+                </button>
+
+                {/* Simulate Admin Document Deletion */}
+                <button
+                  onClick={devSimulateAdminDeletion}
+                  className="w-full text-left py-2.5 px-4 bg-rose-950/50 hover:bg-rose-950 text-rose-300 hover:text-rose-200 text-xs font-black rounded-2xl border border-rose-800/40 transition duration-150 flex items-center justify-between"
+                >
+                  <span>🚨 Simulate Admin Profile Delete</span>
+                  <span className="text-[10px] bg-rose-900 text-rose-300 py-0.5 px-2 rounded-full font-bold">Logout</span>
+                </button>
+              </div>
+
+              <div className="h-px bg-slate-800 my-4"></div>
+
+              <div className="text-[10px] text-slate-500 font-bold flex flex-col gap-0.5 leading-normal">
+                <p>• Active User Email: <span className="text-slate-300 font-extrabold">{user?.email || 'Logged Out'}</span></p>
+                <p>• Device Signature ID: <span className="text-slate-300 font-mono text-[9px]">{getDeviceSignature()}</span></p>
+                <p>• Setup Complete: <span className="text-slate-300 font-extrabold">{profile?.isSetupComplete ? 'YES' : 'NO'}</span></p>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* SETUP WIZARD OVERLAY */}
       {showSetupWizard && user && (
@@ -772,7 +903,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               Is that you trying to sign in?
             </h3>
             <p className="text-slate-500 text-sm mt-1 px-4 leading-relaxed">
-              Humne aapke physical registered mobile phone ending in <span className="font-extrabold text-indigo-600">...{lastTwoDigitsOfPhone}</span> par verification overlay prompt bheja hai. Handshake match karne ke liye mobile app par ye matching code select kijiye:
+              Humne aapke physical registered mobile phone ending in <span className="font-extrabold text-indigo-600">...{lastTwoDigitsOfPhone}</span> par verification overlay alert bheja hai. Handshake match karne ke liye mobile app par ye matching code select kijiye:
             </p>
 
             <div className="w-full max-w-xs bg-slate-950 text-slate-200 rounded-[2.5rem] p-6 my-6 border border-slate-800 flex flex-col items-center">
