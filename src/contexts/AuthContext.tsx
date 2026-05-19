@@ -7,7 +7,7 @@ import {
   User
 } from 'firebase/auth';
 import { doc, onSnapshot, updateDoc } from 'firebase/firestore';
-// Import path aapke project structure ke hisaab se update kiya gaya hai
+// Error fixed: Importing from the correct path found in your AUTH.tsx snippet
 import { auth, db } from '../lib/firebase';
 import { UserProfile } from '../types';
 
@@ -25,6 +25,8 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType>({} as AuthContextType);
+
+export const useAuth = () => useContext(AuthContext);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
