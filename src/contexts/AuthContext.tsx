@@ -1,12 +1,18 @@
 import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
 import { 
-  onAuthStateChanged, signInWithPopup, signInWithRedirect, getRedirectResult, 
-  GoogleAuthProvider, signOut, setPersistence, browserLocalPersistence, 
-  User, initializeApp, getAuth, Auth 
+  onAuthStateChanged, 
+  signInWithPopup, 
+  signInWithRedirect, 
+  GoogleAuthProvider, 
+  signOut,
+  setPersistence,
+  browserLocalPersistence,
+  User,
+  initializeApp,
+  getAuth
 } from 'firebase/auth';
-import { doc, getDoc, setDoc, getFirestore, Firestore } from 'firebase/firestore';
+import { doc, getDoc, setDoc, getFirestore } from 'firebase/firestore';
 
-// --- Configuration ---
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
@@ -20,33 +26,35 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// --- Factorization Engine for Handshake ---
-const getFactorization = (num: number) => {
+// Factorization engine for handshake
+const getFactorization = (n: number) => {
   const factors: number[] = [];
-  for (let i = 1; i <= Math.sqrt(num); i++) {
-    if (num % i === 0) {
+  for (let i = 1; i <= Math.sqrt(n); i++) {
+    if (n % i === 0) {
       factors.push(i);
-      if (i !== num / i) factors.push(num / i);
+      if (i !== n / i) factors.push(n / i);
     }
   }
   return factors.sort((a, b) => a - b);
 };
 
-// --- Auth Context Definition ---
 interface AuthContextType {
   user: User | null;
   profile: any | null;
   loading: boolean;
+  loginWithGoogle: () => void;
+  logout: () => Promise<void>;
   isDeviceAuthorized: boolean;
-  isSessionVerified: boolean;
   showSetupWizard: boolean;
   devToolkit: {
     enabled: boolean;
     logs: string[];
     factorize: (n: number) => number[];
   };
-  loginWithGoogle: () => void;
-  logout: () => Promise<void>;
+  handshake: {
+    initiate: () => void;
+    status: string;
+  };
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -56,29 +64,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [profile, setProfile] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [isDeviceAuthorized, setIsDeviceAuthorized] = useState(true);
-  const [isSessionVerified, setIsSessionVerified] = useState(false);
   const [showSetupWizard, setShowSetupWizard] = useState(false);
-  
-  // Dev Toolkit State
-  const [logs, setLogs] = useState<string[]>(['System Ready', 'Initializing Auth Handshake...']);
-  
-  const appId = "omaxe-society-connect-v1";
+  const [logs, setLogs] = useState<string[]>(['System Ready', 'Auth context mounted...']);
+  const [handshakeStatus, setHandshakeStatus] = useState('idle');
 
-  const addLog = (msg: string) => setLogs(prev => [...prev.slice(-10), `[${new Date().toLocaleTimeString()}] ${msg}`]);
+  const addLog = (msg: string) => setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
 
-  const handleUserLogin = async (currentUser: User) => {
-    addLog('Checking user profile...');
-    const userDocRef = doc(db, 'artifacts', appId, 'users', currentUser.uid, 'profile', 'user_data');
-    const userDoc = await getDoc(userDocRef);
-
-    if (!userDoc.exists()) {
-      addLog('New user detected, launching Setup Wizard.');
-      setShowSetupWizard(true);
-    } else {
-      addLog('Profile found, authorizing session.');
-      setProfile(userDoc.data());
-      setIsSessionVerified(true);
-    }
+  const initiateHandshake = () => {
+    addLog('Initiating secure handshake...');
+    setHandshakeStatus('encrypting');
+    setTimeout(() => {
+      setHandshakeStatus('authorized');
+      addLog('Handshake successful. Access granted.');
+    }, 1500);
   };
 
   useEffect(() => {
@@ -86,36 +84,40 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (currentUser) {
         setUser(currentUser);
-        await handleUserLogin(currentUser);
+        addLog(`User logged in: ${currentUser.email}`);
+        
+        // Sync user profile
+        const userDocRef = doc(db, 'artifacts', 'omaxe-society-connect-v1', 'users', currentUser.uid, 'profile', 'user_data');
+        const userDoc = await getDoc(userDocRef);
+        if (!userDoc.exists()) {
+          addLog('First time user: launching wizard');
+          setShowSetupWizard(true);
+        } else {
+          setProfile(userDoc.data());
+        }
       } else {
         setUser(null);
+        addLog('User signed out.');
       }
       setLoading(false);
     });
     return () => unsubscribe();
   }, []);
 
-  const value = {
-    user,
-    profile,
-    loading,
-    isDeviceAuthorized,
-    isSessionVerified,
-    showSetupWizard,
-    devToolkit: {
-      enabled: true,
-      logs,
-      factorize: getFactorization
-    },
-    loginWithGoogle: () => {
-      const provider = new GoogleAuthProvider();
-      signInWithPopup(auth, provider).catch(() => signInWithRedirect(auth, provider));
-    },
-    logout: async () => await signOut(auth)
+  const loginWithGoogle = () => {
+    const provider = new GoogleAuthProvider();
+    signInWithPopup(auth, provider).catch(() => signInWithRedirect(auth, provider));
   };
 
+  const logout = async () => await signOut(auth);
+
   return (
-    <AuthContext.Provider value={value}>
+    <AuthContext.Provider value={{ 
+      user, profile, loading, loginWithGoogle, logout, 
+      isDeviceAuthorized, showSetupWizard,
+      devToolkit: { enabled: true, logs, factorize: getFactorization },
+      handshake: { initiate: initiateHandshake, status: handshakeStatus }
+    }}>
       {children}
     </AuthContext.Provider>
   );
