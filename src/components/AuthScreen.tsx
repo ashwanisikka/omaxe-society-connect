@@ -33,7 +33,7 @@ export function AuthScreen() {
               <Home size={32} />
             </div>
             <CardTitle className="text-3xl font-black text-gray-900 uppercase italic tracking-tighter">Omaxe Heights</CardTitle>
-            <CardDescription className="font-bold text-indigo-600 uppercase tracking-widest text-xs">Resident Secure Portal</CardDescription>
+            <CardDescription className="font-bold text-indigo-600 uppercase tracking-widest text-xs">Society's Digital Yellow Pages.</CardDescription>
           </CardHeader>
 
           <CardContent className="p-8 pt-0">
