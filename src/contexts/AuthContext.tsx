@@ -56,18 +56,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isDeviceAuthorized, setIsDeviceAuthorized] = useState(true);
   const [isSessionVerified, setIsSessionVerified] = useState(false);
 
-  // Setup Form Wizard states
   const [showSetupWizard, setShowSetupWizard] = useState(false);
-  const [setupStep, setSetupStep] = useState(1); // 1: Info, 2: Mobile Number, 3: Awaiting Link Activation
+  const [setupStep, setSetupStep] = useState(1); 
   const [setupName, setSetupName] = useState('');
   const [setupPhone, setSetupPhone] = useState('');
   const [setupGender, setSetupGender] = useState('');
   const [setupSubmitLoading, setSetupSubmitLoading] = useState(false);
 
-  // Dev toolkit toggle state
   const [showDevToolkit, setShowDevToolkit] = useState(false);
 
-  // Decoupled refs to prevent keystroke resets on input triggers
   const setupNameRef = useRef(setupName);
   const setupGenderRef = useRef(setupGender);
   const setupPhoneRef = useRef(setupPhone);
@@ -76,7 +73,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => { setupGenderRef.current = setupGender; }, [setupGender]);
   useEffect(() => { setupPhoneRef.current = setupPhone; }, [setupPhone]);
 
-  // Google-style 2FA Lock Overlay states
   const [showLaptopHandshake, setShowLaptopHandshake] = useState(false);
   const [laptopHandshakeCode, setLaptopHandshakeCode] = useState('');
   const [mobileChallengeData, setMobileChallengeData] = useState<{
@@ -85,13 +81,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     status: string;
   } | null>(null);
 
-  // PWA Installation states
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [showInstallBanner, setShowInstallBanner] = useState(false);
 
   const appId = typeof (window as any).__app_id !== 'undefined' ? (window as any).__app_id : 'default-app-id';
 
-  // Watcher to capture "Add to Home Screen" installation event from browser
   useEffect(() => {
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
@@ -101,7 +95,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
 
-    // Check if the application is already running as an installed standalone app
     const isStandalone = window.matchMedia('(display-mode: standalone)').matches || (navigator as any).standalone;
     if (isStandalone) {
       setShowInstallBanner(false);
@@ -175,10 +168,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             setShowLaptopHandshake(false);
             toast.success(`Welcome back, ${userData.displayName || 'Resident'}!`);
           } else {
-            // Desktop login authorization challenge
             if (isDesktopClient) {
               console.log("[AuthContext] Desktop login challenge triggered.");
-              setIsSessionVerified(true); // Keeps user inside app routing tree
+              setIsSessionVerified(true); 
               setShowSetupWizard(false);
               
               const targetNum = (Math.floor(Math.random() * 90) + 10).toString();
@@ -302,7 +294,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           const verificationRef = doc(db, 'artifacts', appId, 'public', 'data', 'verifications', currentUser.uid);
           const userDocRef = doc(db, 'artifacts', appId, 'users', currentUser.uid, 'profile', 'user_data');
           
-          // REAL-TIME FORCE-LOGOUT watcher: Checks if Admin deletes the profile document in Firestore
           unsubProfileDeleteWatcher = onSnapshot(userDocRef, async (profileSnap) => {
             if (!profileSnap.exists()) {
               const hasLocalProfile = localStorage.getItem(`omaxe_user_profile_${currentUser.uid}`);
@@ -324,7 +315,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             console.warn("[AuthContext] Real-time profile sync restricted:", err.message);
           });
 
-          // Listen for Laptop Handshake updates
           unsubChallenge = onSnapshot(challengeRef, async (snapshot) => {
             if (snapshot.exists()) {
               const data = snapshot.data();
@@ -368,7 +358,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             console.warn("[AuthContext] Handshake challenge listener rules restrict:", err.message);
           });
 
-          // Handshake SIM loopback listener
           unsubVerification = onSnapshot(verificationRef, async (snapshot) => {
             if (snapshot.exists()) {
               const data = snapshot.data();
@@ -452,7 +441,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const signIn = executeGoogleAuth;
   const login = executeGoogleAuth;
 
-  // Triggers self SMS validation intent (Proves SIM physical location ownership)
   const initiateSimLoopbackHandshake = async () => {
     if (!user) return;
     const finalPhone = setupPhone.trim().replace(/\D/g, '');
@@ -481,13 +469,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (e: any) {
       toast.error(`SIM configuration error: ${e.message}`);
     } finally {
-      setSetupStep(3); // Soft-fallback steps
+      setSetupStep(3); 
       setSetupSubmitLoading(false);
     }
   };
 
   const verifyAndBindPhone = async (): Promise<{ safe: boolean }> => {
-    return { safe: true } as any; // Backward compatibility trigger
+    return { safe: true } as any; 
   };
 
   const handleMobileVerificationTap = async (selectedCode: string) => {
@@ -538,10 +526,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
   const signOutUser = logout;
 
-  // ==========================================
-  // DEV TOOLKIT ACTIONS FOR RAPID MULTI-ACCOUNT TESTING
-  // ==========================================
-  
   const devResetProfileInDatabase = async () => {
     if (!user) {
       toast.error("Please login with a Google account first to reset it!");
@@ -549,7 +533,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
     setLoading(true);
     try {
-      // Overwrite strategy instead of deleting - completely bypasses firestore security rule blocks!
       const userDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'user_data');
       await setDoc(userDocRef, {
         isSetupComplete: false,
@@ -563,7 +546,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (err: any) {
       console.warn("[DevToolkit] Firestore cleanup skipped/blocked by permission rules:", err.message);
     } finally {
-      // Clear local states - Fail-safe path, continues even if Firestore throws rules block!
       localStorage.removeItem(`omaxe_user_profile_${user.uid}`);
       setProfile(null);
       setIsSessionVerified(false);
@@ -589,13 +571,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return;
     }
     try {
-      // Direct set override so it blocks the session without throwing deleteDoc error
       const userDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'user_data');
       await setDoc(userDocRef, { isSetupComplete: false, phoneVerified: false }, { merge: true });
     } catch (err: any) {
       console.warn("[DevToolkit] Firestore simulate skip permissions:", err.message);
     } finally {
-      // Simulate instantly locally to make sure testing never gets blocked!
       localStorage.removeItem(`omaxe_user_profile_${user.uid}`);
       setProfile(null);
       setIsSessionVerified(false);
@@ -627,7 +607,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       signOutUser,       
       verifyAndBindPhone,
       isDeviceAuthorized,
-      isSessionVerified, // Connects directly to App router locks
+      isSessionVerified,
       isAdmin,
       isMasterAdmin,
       submitMobileResponseKey,
@@ -636,7 +616,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }}>
       {children}
 
-      {/* UNIVERSAL PWA APP INSTALLATION NOTIFICATION BAR (Shown to all devices on first-time load) */}
       {showInstallBanner && (
         <div className="fixed top-4 left-4 right-4 z-[2000000] flex items-center justify-between bg-slate-900 text-white p-4 rounded-[1.8rem] shadow-2xl border-2 border-indigo-500/30 animate-in slide-in-from-top-10 duration-300">
           <div className="flex items-center gap-3">
@@ -663,7 +642,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         </div>
       )}
 
-      {/* FLOATING DEVELOPER SANDBOX TOOLKIT PANEL - RENDERED FOR MASTER ADMIN (ashwani.sikka@gmail.com) ONLY */}
       {isMasterAdmin && (
         <div className="fixed bottom-6 right-6 z-[999999] flex flex-col items-end">
           {!showDevToolkit ? (
@@ -692,7 +670,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               </p>
 
               <div className="space-y-2.5">
-                {/* Reset active user in Firestore */}
                 <button
                   onClick={devResetProfileInDatabase}
                   className="w-full text-left py-2.5 px-4 bg-indigo-950/50 hover:bg-indigo-950 text-indigo-300 hover:text-indigo-200 text-xs font-black rounded-2xl border border-indigo-800/40 transition duration-150 flex items-center justify-between"
@@ -701,7 +678,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                   <span className="text-[10px] bg-indigo-900 text-indigo-300 py-0.5 px-2 rounded-full font-bold">Wizard</span>
                 </button>
 
-                {/* Wipe device signature */}
                 <button
                   onClick={devWipeDeviceSignature}
                   className="w-full text-left py-2.5 px-4 bg-indigo-950/50 hover:bg-indigo-950 text-indigo-300 hover:text-indigo-200 text-xs font-black rounded-2xl border border-indigo-800/40 transition duration-150 flex items-center justify-between"
@@ -710,7 +686,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                   <span className="text-[10px] bg-indigo-900 text-indigo-300 py-0.5 px-2 rounded-full font-bold">2FA Laptop</span>
                 </button>
 
-                {/* Simulate Admin Document Deletion */}
                 <button
                   onClick={devSimulateAdminDeletion}
                   className="w-full text-left py-2.5 px-4 bg-rose-950/50 hover:bg-rose-950 text-rose-300 hover:text-rose-200 text-xs font-black rounded-2xl border border-rose-800/40 transition duration-150 flex items-center justify-between"
@@ -732,7 +707,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         </div>
       )}
 
-      {/* SETUP WIZARD OVERLAY */}
       {showSetupWizard && user && (
         <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4 bg-slate-950/95 backdrop-blur-md overflow-y-auto">
           <div className="w-full max-w-lg bg-white rounded-[2.5rem] shadow-2xl p-8 border border-slate-100 flex flex-col my-8 animate-in fade-in zoom-in-95 duration-200">
@@ -746,7 +720,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               <div className="h-1 w-16 bg-indigo-600 rounded-full mt-3"></div>
             </div>
 
-            {/* LAPTOP / DESKTOP SECURE MESSAGE BLOCK - INSTEAD OF SHOWN REGISTRATION FIELDS */}
             {isDesktop ? (
               <div className="space-y-6 text-center">
                 <div className="w-20 h-20 bg-indigo-50 rounded-[2.2rem] flex items-center justify-center text-indigo-600 mx-auto mb-2 shadow-inner">
@@ -799,9 +772,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 </div>
               </div>
             ) : (
-              /* MOBILE FLOW: REGISTRATION STEPS ALLOWED */
               <div className="space-y-5">
-                {/* STEP 1: Full Name & Gender */}
                 {setupStep === 1 && (
                   <div className="space-y-5">
                     <div>
@@ -869,7 +840,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                   </div>
                 )}
 
-                {/* STEP 2: Mobile Number & SIM Verification Trigger */}
                 {setupStep === 2 && (
                   <div className="space-y-5">
                     <div>
@@ -879,7 +849,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                       <div className="relative">
                         <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 font-black text-sm">
                           +91
-                    </span>
+                        </span>
                         <input
                           type="tel"
                           maxLength={10}
@@ -914,7 +884,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                   </div>
                 )}
 
-                {/* STEP 3: SIM Link Verification Pending state */}
                 {setupStep === 3 && (
                   <div className="space-y-6 text-center">
                     <div className="w-16 h-16 bg-indigo-50 rounded-3xl flex items-center justify-center text-indigo-600 mx-auto mb-2 animate-bounce">
@@ -948,7 +917,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                         <svg className="animate-spin h-4 w-4 text-indigo-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
+                        </svg>
                         <span>Awaiting SIM confirmation click...</span>
                       </div>
 
@@ -970,7 +939,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                   </div>
                 )}
 
-                {/* General Cancel Trigger */}
                 <div className="pt-4 border-t border-slate-100 mt-6 text-center">
                   <button
                     type="button"
@@ -986,7 +954,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         </div>
       )}
 
-      {/* LAPTOP GOOGLE-STYLE 2FA LOCK OVERLAY (Unbypassable Fullscreen Block) */}
       {showLaptopHandshake && user && (
         <div className="fixed inset-0 z-[999999] flex items-center justify-center p-4 bg-slate-950/98 backdrop-blur-md overflow-hidden">
           <div className="w-full max-w-lg bg-white rounded-[2.5rem] shadow-2xl p-8 border border-slate-100 flex flex-col items-center text-center animate-in fade-in zoom-in-95 duration-200">
@@ -1043,7 +1010,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         </div>
       )}
 
-      {/* MOBILE SCREEN OVERLAY: Displays the active 2FA prompts with decoy matching codes */}
       {mobileChallengeData && user && (
         <div className="fixed inset-0 z-[999999] flex items-center justify-center p-4 bg-slate-950/95 backdrop-blur-lg">
           <div className="w-full max-w-sm bg-white rounded-[2.5rem] shadow-2xl p-6 border border-slate-100 flex flex-col items-center text-center animate-in slide-in-from-bottom duration-300">
@@ -1058,7 +1024,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               Is that you trying to sign in from a Laptop? Tap the matching number shown on your laptop screen to authorize access:
             </p>
             
-            {/* Horizontal choice grid matching Google's native 2FA layout */}
             <div className="grid grid-cols-3 gap-3 w-full mb-6">
               {mobileChallengeData.choices.map((codeOption) => (
                 <button
@@ -1083,7 +1048,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           </div>
         </div>
       )}
-    </AuthProvider>
+    </AuthContext.Provider>
   );
 };
 
