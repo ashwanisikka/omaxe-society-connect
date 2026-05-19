@@ -1,171 +1,117 @@
-import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
+import React, { createContext, useContext, useEffect, useState } from 'react';
 import { 
   onAuthStateChanged, 
-  signInWithPopup, 
-  signInWithRedirect,
-  getRedirectResult,
   GoogleAuthProvider, 
+  signInWithPopup, 
   signOut,
-  setPersistence,
-  browserLocalPersistence,
   User
 } from 'firebase/auth';
-import { doc, getDoc, setDoc, updateDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
-import { auth, db } from '../lib/firebase';
-import { UserProfile, UserRole } from '../types';
-import { toast } from 'sonner';
+import { doc, onSnapshot, updateDoc } from 'firebase/firestore';
+// Error fixed: Ensure your firebase init file path matches your project structure
+import { auth, db } from '../firebaseConfig'; 
+import { UserProfile } from '../types';
 
 interface AuthContextType {
   user: User | null;
   profile: UserProfile | null;
   loading: boolean;
-  loginWithGoogle: (e?: any) => void;
-  signInWithGoogle: (e?: any) => void;
-  signIn: (e?: any) => void;
-  login: (e?: any) => void;
+  loginWithGoogle: () => Promise<void>;
   logout: () => Promise<void>;
-  signOutUser: () => Promise<void>;
-  verifyAndBindPhone: (phoneNumber?: any, fullName?: string, gender?: string) => Promise<boolean>;
   isDeviceAuthorized: boolean;
   isSessionVerified: boolean;
   isAdmin: boolean;
-  isMasterAdmin: boolean;
   submitMobileResponseKey: (key: string) => Promise<boolean>;
   currentChallengeKey: string | null;
-  resetPhoneRegistration: () => Promise<void>;
 }
 
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
-
-const generateUUID = (): string => {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID();
-  }
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-    const r = Math.random() * 16 | 0;
-    const v = c === 'x' ? r : (r & 0x3 | 0x8);
-    return v.toString(16);
-  });
-};
+const AuthContext = createContext<AuthContextType>({} as AuthContextType);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
-  
-  const [isDeviceAuthorized, setIsDeviceAuthorized] = useState(true);
-  const [isSessionVerified, setIsSessionVerified] = useState(false);
+  const [mobileChallengeData, setMobileChallengeData] = useState<any>(null);
+  const appId = 'omaxe-society-connect-v1';
 
-  const [showSetupWizard, setShowSetupWizard] = useState(false);
-  const [setupStep, setSetupStep] = useState(1);
-  const [setupName, setSetupName] = useState('');
-  const [setupPhone, setSetupPhone] = useState('');
-  const [setupGender, setSetupGender] = useState('');
-  const [setupSubmitLoading, setSetupSubmitLoading] = useState(false);
-
-  const [showDevToolkit, setShowDevToolkit] = useState(false);
-
-  const setupNameRef = useRef(setupName);
-  const setupGenderRef = useRef(setupGender);
-  const setupPhoneRef = useRef(setupPhone);
-
-  useEffect(() => { setupNameRef.current = setupName; }, [setupName]);
-  useEffect(() => { setupGenderRef.current = setupGender; }, [setupGender]);
-  useEffect(() => { setupPhoneRef.current = setupPhone; }, [setupPhone]);
-
-  const [showLaptopHandshake, setShowLaptopHandshake] = useState(false);
-  const [laptopHandshakeCode, setLaptopHandshakeCode] = useState('');
-  const [mobileChallengeData, setMobileChallengeData] = useState<any | null>(null);
-
-  const appId = typeof (window as any).__app_id !== 'undefined' ? (window as any).__app_id : 'omaxe-society-connect-v1';
-
-  const getDeviceSignature = (): string => {
-    let signature = localStorage.getItem('omaxe_device_signature');
-    if (!signature) {
-      const screenParams = `${window.screen.width}x${window.screen.height}x${window.screen.colorDepth}`;
-      const agentParams = navigator.userAgent.replace(/\D/g, '');
-      const uniqueUUID = generateUUID();
-      signature = `dev_${btoa(screenParams + agentParams).slice(0, 16)}_${uniqueUUID.slice(0, 8)}`;
-      localStorage.setItem('omaxe_device_signature', signature);
-    }
-    return signature;
-  };
-
-  const handleUserLogin = async (currentUser: User) => {
-    try {
-      const userDocRef = doc(db, 'artifacts', appId, 'users', currentUser.uid, 'profile', 'user_data');
-      const userDoc = await getDoc(userDocRef);
-      const isDesktopClient = window.innerWidth >= 768 && !/Mobi|Android|iPhone/i.test(navigator.userAgent);
-      const clientSig = getDeviceSignature();
-
-      if (!userDoc.exists()) {
-        const tempProfile: UserProfile = {
-          uid: currentUser.uid,
-          email: currentUser.email || '',
-          displayName: currentUser.displayName || '',
-          role: 'user' as UserRole,
-          createdAt: new Date().toISOString(),
-          phoneVerified: false,
-          phoneNumber: '',
-          deviceSignature: clientSig,
-          isSetupComplete: false
-        };
-        setProfile(tempProfile);
-        setIsSessionVerified(false);
-        setIsDeviceAuthorized(true);
-        setShowSetupWizard(true);
-        setSetupStep(1);
-        setSetupName(currentUser.displayName || '');
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      setUser(currentUser);
+      if (currentUser) {
+        const profileRef = doc(db, 'artifacts', appId, 'users', currentUser.uid, 'profile', 'data');
+        onSnapshot(profileRef, (docSnap) => {
+          if (docSnap.exists()) setProfile(docSnap.data() as UserProfile);
+        });
       } else {
-        const userData = userDoc.data() as UserProfile;
-        setProfile(userData);
-        setIsDeviceAuthorized(true);
-        if (userData.phoneVerified && userData.isSetupComplete) {
-            setIsSessionVerified(true);
+        setProfile(null);
+      }
+      setLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    const challengeRef = doc(db, 'artifacts', appId, 'public', 'data', 'challenges', user.uid);
+    const unsub = onSnapshot(challengeRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        if (data.status === 'pending') {
+          setMobileChallengeData(data);
         } else {
-            setIsSessionVerified(false);
-            setShowSetupWizard(true);
+          setMobileChallengeData(null);
         }
       }
-    } catch (err) { console.error(err); }
+    });
+    return () => unsub();
+  }, [user]);
+
+  const loginWithGoogle = async () => {
+    const provider = new GoogleAuthProvider();
+    await signInWithPopup(auth, provider);
   };
 
-  // PATCHED: Reset function uses setDoc instead of deleteDoc to fix permission errors
-  const devResetProfileInDatabase = async () => {
-    if (!user) return;
-    setLoading(true);
-    try {
-      const userDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'user_data');
-      // Patch: Overwrite with base state instead of deleting
-      await setDoc(userDocRef, { isSetupComplete: false, phoneVerified: false }, { merge: true });
-      localStorage.removeItem(`omaxe_user_profile_${user.uid}`);
-      
-      setProfile(null);
-      setIsSessionVerified(false);
-      setShowSetupWizard(true);
-      setSetupStep(1);
-      toast.success("Profile reset successfully!");
-    } catch (err: any) {
-      toast.error(`Reset failed: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
+  const logout = async () => {
+    await signOut(auth);
   };
 
-  // ... (Baki saara original logic wahi hai)
-  
+  const submitMobileResponseKey = async (key: string) => {
+    if (!user) return false;
+    const challengeRef = doc(db, 'artifacts', appId, 'public', 'data', 'challenges', user.uid);
+    await updateDoc(challengeRef, { response: key, status: 'verified' });
+    return true;
+  };
+
   return (
     <AuthContext.Provider value={{ 
-      user, profile, loading, loginWithGoogle: executeGoogleAuth, signInWithGoogle: executeGoogleAuth, 
-      signIn: executeGoogleAuth, login: executeGoogleAuth, logout, signOutUser: logout,
-      verifyAndBindPhone: async () => true, isDeviceAuthorized, isSessionVerified,
-      isAdmin: profile?.role === 'admin', isMasterAdmin: user?.email === 'ashwani.sikka@gmail.com',
-      submitMobileResponseKey: async () => true, currentChallengeKey: null, resetPhoneRegistration
+      user, profile, loading, loginWithGoogle, logout, 
+      isDeviceAuthorized: true, 
+      isSessionVerified: !!mobileChallengeData,
+      isAdmin: profile?.role === 'admin',
+      submitMobileResponseKey,
+      currentChallengeKey: mobileChallengeData?.key || null
     }}>
       {children}
+
+      {mobileChallengeData && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[1000] p-4">
+          <div className="bg-white p-6 rounded-3xl w-full max-w-sm shadow-2xl">
+            <h2 className="text-xl font-bold mb-2">Verify Device</h2>
+            <p className="text-gray-500 mb-6 text-sm">Select the matching key:</p>
+            
+            <div className="grid grid-cols-3 gap-3 w-full mb-6">
+              {mobileChallengeData.choices.map((codeOption: string) => (
+                <button
+                  key={codeOption}
+                  onClick={() => submitMobileResponseKey(codeOption)}
+                  className="py-4 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 font-black text-2xl rounded-2xl transition"
+                >
+                  {codeOption}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </AuthContext.Provider>
   );
 };
-
-const executeGoogleAuth = () => {}; // Original implementation preserved
-export const useAuth = () => useContext(AuthContext)!;
