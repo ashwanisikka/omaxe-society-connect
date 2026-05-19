@@ -1,20 +1,12 @@
 import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
 import { 
-  onAuthStateChanged, 
-  signInWithPopup, 
-  signInWithRedirect,
-  getRedirectResult,
-  GoogleAuthProvider, 
-  signOut,
-  setPersistence,
-  browserLocalPersistence,
-  User,
-  initializeApp,
-  getAuth
+  onAuthStateChanged, signInWithPopup, signInWithRedirect, getRedirectResult, 
+  GoogleAuthProvider, signOut, setPersistence, browserLocalPersistence, 
+  User, initializeApp, getAuth, Auth 
 } from 'firebase/auth';
-import { doc, getDoc, setDoc, onSnapshot, getFirestore, DocumentData } from 'firebase/firestore';
+import { doc, getDoc, setDoc, getFirestore, Firestore } from 'firebase/firestore';
 
-// Initializing Services
+// --- Configuration ---
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
@@ -28,20 +20,33 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// Full Interface for Society Connect Application
+// --- Factorization Engine for Handshake ---
+const getFactorization = (num: number) => {
+  const factors: number[] = [];
+  for (let i = 1; i <= Math.sqrt(num); i++) {
+    if (num % i === 0) {
+      factors.push(i);
+      if (i !== num / i) factors.push(num / i);
+    }
+  }
+  return factors.sort((a, b) => a - b);
+};
+
+// --- Auth Context Definition ---
 interface AuthContextType {
   user: User | null;
   profile: any | null;
   loading: boolean;
-  loginWithGoogle: () => void;
-  logout: () => Promise<void>;
   isDeviceAuthorized: boolean;
   isSessionVerified: boolean;
   showSetupWizard: boolean;
-  setupStep: number;
-  // Methods for handshake and complex flows
-  submitMobileResponseKey: (key: string) => Promise<boolean>;
-  resetPhoneRegistration: () => Promise<void>;
+  devToolkit: {
+    enabled: boolean;
+    logs: string[];
+    factorize: (n: number) => number[];
+  };
+  loginWithGoogle: () => void;
+  logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -53,27 +58,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isDeviceAuthorized, setIsDeviceAuthorized] = useState(true);
   const [isSessionVerified, setIsSessionVerified] = useState(false);
   const [showSetupWizard, setShowSetupWizard] = useState(false);
-  const [setupStep, setSetupStep] = useState(1);
-
+  
+  // Dev Toolkit State
+  const [logs, setLogs] = useState<string[]>(['System Ready', 'Initializing Auth Handshake...']);
+  
   const appId = "omaxe-society-connect-v1";
 
-  // Complex Logic Recovery: Syncing User Data and Device Fingerprinting
-  const handleUserLogin = async (currentUser: User) => {
-    try {
-      const userDocRef = doc(db, 'artifacts', appId, 'users', currentUser.uid, 'profile', 'user_data');
-      const userDoc = await getDoc(userDocRef);
+  const addLog = (msg: string) => setLogs(prev => [...prev.slice(-10), `[${new Date().toLocaleTimeString()}] ${msg}`]);
 
-      if (!userDoc.exists()) {
-        setShowSetupWizard(true);
-        setSetupStep(1);
-      } else {
-        const userData = userDoc.data();
-        setProfile(userData);
-        setShowSetupWizard(false);
-        setIsSessionVerified(true);
-      }
-    } catch (err) {
-      console.error("Critical Auth Data Sync Error:", err);
+  const handleUserLogin = async (currentUser: User) => {
+    addLog('Checking user profile...');
+    const userDocRef = doc(db, 'artifacts', appId, 'users', currentUser.uid, 'profile', 'user_data');
+    const userDoc = await getDoc(userDocRef);
+
+    if (!userDoc.exists()) {
+      addLog('New user detected, launching Setup Wizard.');
+      setShowSetupWizard(true);
+    } else {
+      addLog('Profile found, authorizing session.');
+      setProfile(userDoc.data());
+      setIsSessionVerified(true);
     }
   };
 
@@ -85,43 +89,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await handleUserLogin(currentUser);
       } else {
         setUser(null);
-        setProfile(null);
       }
       setLoading(false);
     });
     return () => unsubscribe();
   }, []);
 
-  const loginWithGoogle = () => {
-    const provider = new GoogleAuthProvider();
-    signInWithPopup(auth, provider).catch((err) => {
-      console.error("Popup Error, trying redirect", err);
-      signInWithRedirect(auth, provider);
-    });
+  const value = {
+    user,
+    profile,
+    loading,
+    isDeviceAuthorized,
+    isSessionVerified,
+    showSetupWizard,
+    devToolkit: {
+      enabled: true,
+      logs,
+      factorize: getFactorization
+    },
+    loginWithGoogle: () => {
+      const provider = new GoogleAuthProvider();
+      signInWithPopup(auth, provider).catch(() => signInWithRedirect(auth, provider));
+    },
+    logout: async () => await signOut(auth)
   };
-
-  const logout = async () => {
-    await signOut(auth);
-  };
-
-  // Dummy implementations to satisfy interface for the complex flow
-  const submitMobileResponseKey = async (key: string) => true;
-  const resetPhoneRegistration = async () => { setShowSetupWizard(true); setSetupStep(1); };
 
   return (
-    <AuthContext.Provider value={{ 
-      user, 
-      profile, 
-      loading, 
-      loginWithGoogle, 
-      logout,
-      isDeviceAuthorized,
-      isSessionVerified,
-      showSetupWizard,
-      setupStep,
-      submitMobileResponseKey,
-      resetPhoneRegistration
-    }}>
+    <AuthContext.Provider value={value}>
       {children}
     </AuthContext.Provider>
   );
